@@ -76,7 +76,71 @@ class App(ctk.CTk):
             widget.destroy()
 
     def pos_button_event(self):
-        print("Cambiando a Punto de Venta...")
+        self.limpiar_panel_derecho()
+
+        # Configurar rejilla para el POS (1 fila, 2 columnas con pesos distintos)
+        self.home_frame.grid_columnconfigure(0, weight=1) # Columna de productos
+        self.home_frame.grid_columnconfigure(1, weight=0) # Columna de carrito (fija)
+
+        # --- COLUMNA IZQUIERDA: PRODUCTOS ---
+        frame_productos = ctk.CTkFrame(self.home_frame)
+        frame_productos.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+
+        ctk.CTkLabel(frame_productos, text="Venta de Productos", font=ctk.CTkFont(size=20, weight="bold")).pack(pady=10)
+
+        # Buscador rápido
+        self.entry_buscar_pos = ctk.CTkEntry(frame_productos, placeholder_text="Buscar producto...", width=300)
+        self.entry_buscar_pos.pack(pady=5)
+        # Nota: Aquí conectaremos luego un evento para filtrar mientras escribes
+
+        # Tabla de productos disponibles
+        self.tabla_pos_prod = ttk.Treeview(frame_productos, columns=("ID", "Producto", "Precio"), show="headings", height=12)
+        self.tabla_pos_prod.heading("ID", text="ID")
+        self.tabla_pos_prod.heading("Producto", text="Producto")
+        self.tabla_pos_prod.heading("Precio", text="Precio ($)")
+        self.tabla_pos_prod.column("ID", width=50)
+        self.tabla_pos_prod.pack(padx=10, pady=10, fill="both", expand=True)
+        
+        btn_al_carrito = ctk.CTkButton(frame_productos, text="🛒 Añadir al Carrito", fg_color="#2c3e50")
+        btn_al_carrito.pack(pady=10)
+
+        # --- COLUMNA DERECHA: CARRITO Y COBRO ---
+        frame_carrito = ctk.CTkFrame(self.home_frame, width=350, fg_color=("#dbdbdb", "#2b2b2b"))
+        frame_carrito.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
+
+        ctk.CTkLabel(frame_carrito, text="Carrito de Compras", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+
+        self.tabla_carrito = ttk.Treeview(frame_carrito, columns=("Prod", "Cant", "Subt"), show="headings", height=10)
+        self.tabla_carrito.heading("Prod", text="Prod")
+        self.tabla_carrito.heading("Cant", text="Cant")
+        self.tabla_carrito.heading("Subt", text="Subt")
+        self.tabla_carrito.column("Cant", width=50)
+        self.tabla_carrito.pack(padx=10, pady=10, fill="x")
+
+        # TOTAL
+        self.label_total = ctk.CTkLabel(frame_carrito, text="TOTAL: $0.00", font=ctk.CTkFont(size=22, weight="bold"), text_color="green")
+        self.label_total.pack(pady=20)
+
+        # Selección de Cliente/Cuenta
+        ctk.CTkLabel(frame_carrito, text="Asignar a Cuenta:").pack()
+        self.combo_cuentas_pos = ctk.CTkOptionMenu(frame_carrito, values=["Cargando cuentas..."], width=250)
+        self.combo_cuentas_pos.pack(pady=10)
+
+        btn_finalizar = ctk.CTkButton(frame_carrito, text="FINALIZAR VENTA", fg_color="green", height=50, font=ctk.CTkFont(weight="bold"))
+        btn_finalizar.pack(pady=20, padx=20, fill="x")
+        
+        self.cargar_productos_pos() # Función que llenará la tabla de la izquierda
+
+    def cargar_productos_pos(self):
+        for item in self.tabla_pos_prod.get_children():
+            self.tabla_pos_prod.delete(item)
+        con = conectar()
+        if con:
+            cursor = con.cursor()
+            cursor.execute("SELECT id_producto, nombre, precio FROM productos WHERE estado = 'Disponible'")
+            for fila in cursor.fetchall():
+                self.tabla_pos_prod.insert("", "end", values=fila)
+            con.close()
 
     def cuentas_button_event(self):
         self.limpiar_panel_derecho()
