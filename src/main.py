@@ -1,6 +1,8 @@
 import customtkinter as ctk
 from PIL import Image # La usaremos más adelante para iconos
 from tkinter import ttk
+from conexion import conectar
+from tkinter import messagebox # Para mostrar alertas de "Guardado con éxito"
 
 # Configuración estética global
 ctk.set_appearance_mode("dark")  # Modos: "System" (standard), "Dark", "Light"
@@ -126,14 +128,55 @@ class App(ctk.CTk):
         self.tabla_productos.column("Precio", width=100, anchor="center")
         
         self.tabla_productos.pack(pady=20, padx=20, fill="both", expand=True)
+        self.cargar_productos() # Carga los datos apenas entras al módulo
 
     # Función temporal para el botón Guardar
     def guardar_producto_db(self):
-        print(f"Guardando: {self.entry_nombre_prod.get()} - {self.menu_categoria.get()} - {self.entry_precio_prod.get()}$")
+        nombre = self.entry_nombre_prod.get()
+        cat = self.menu_categoria.get()
+        precio = self.entry_precio_prod.get()
+
+        if not nombre or not precio:
+            messagebox.showwarning("Atención", "Todos los campos son obligatorios")
+            return
+
+        con = conectar()
+        if con:
+            try:
+                cursor = con.cursor()
+                sql = "INSERT INTO productos (nombre, categoria, precio) VALUES (%s, %s, %s)"
+                valores = (nombre, cat, precio)
+                cursor.execute(sql, valores)
+                con.commit() # ¡Importante para guardar cambios!
+                con.close()
+                
+                messagebox.showinfo("Éxito", f"Producto '{nombre}' guardado correctamente")
+                
+                # Limpiar cajas de texto
+                self.entry_nombre_prod.delete(0, 'end')
+                self.entry_precio_prod.delete(0, 'end')
+                
+                # Refrescar la tabla para ver el cambio
+                self.cargar_productos()
+                
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo guardar: {e}")
 
     def change_appearance_mode_event(self, new_appearance_mode):
         ctk.set_appearance_mode(new_appearance_mode)
 
+    def cargar_productos(self):
+        # Limpiar tabla primero
+        for item in self.tabla_productos.get_children():
+            self.tabla_productos.delete(item)
+            
+        con = conectar()
+        if con:
+            cursor = con.cursor()
+            cursor.execute("SELECT id_producto, nombre, categoria, precio FROM productos")
+            for fila in cursor.fetchall():
+                self.tabla_productos.insert("", "end", values=fila)
+            con.close()
 if __name__ == "__main__":
     app = App()
     app.mainloop()
