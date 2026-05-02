@@ -1,5 +1,6 @@
 import customtkinter as ctk
 from PIL import Image # La usaremos más adelante para iconos
+from tkinter import ttk
 
 # Configuración estética global
 ctk.set_appearance_mode("dark")  # Modos: "System" (standard), "Dark", "Light"
@@ -68,6 +69,10 @@ class App(ctk.CTk):
         self.main_label.pack(pady=40)
 
     # --- FUNCIONES DE LOS EVENTOS ---
+    def limpiar_panel_derecho(self):
+        for widget in self.home_frame.winfo_children():
+            widget.destroy()
+
     def pos_button_event(self):
         print("Cambiando a Punto de Venta...")
 
@@ -75,7 +80,56 @@ class App(ctk.CTk):
         print("Cambiando a Gestión de Cuentas...")
 
     def productos_button_event(self):
-        print("Cambiando a Menú de Productos...")
+        self.limpiar_panel_derecho()
+
+        # Título del módulo
+        titulo = ctk.CTkLabel(
+            self.home_frame, text="Gestión de Menú y Productos", 
+            font=ctk.CTkFont(size=24, weight="bold")
+        )
+        titulo.pack(pady=20)
+
+        # Marco para el formulario (Cajas de texto)
+        frame_formulario = ctk.CTkFrame(self.home_frame)
+        frame_formulario.pack(pady=10, padx=20, fill="x")
+
+        # Cajas de entrada de datos
+        self.entry_nombre_prod = ctk.CTkEntry(frame_formulario, placeholder_text="Nombre del Producto", width=200)
+        self.entry_nombre_prod.grid(row=0, column=0, padx=10, pady=10)
+
+        self.menu_categoria = ctk.CTkOptionMenu(frame_formulario, values=["Desayuno", "Bebida", "Chuchería"])
+        self.menu_categoria.grid(row=0, column=1, padx=10, pady=10)
+
+        self.entry_precio_prod = ctk.CTkEntry(frame_formulario, placeholder_text="Precio (Ej: 1.50)", width=100)
+        self.entry_precio_prod.grid(row=0, column=2, padx=10, pady=10)
+
+        # Botón Guardar (Por ahora solo imprime en consola, luego lo conectaremos a MySQL)
+        btn_guardar_prod = ctk.CTkButton(
+            frame_formulario, text="Guardar Producto", fg_color="green", hover_color="darkgreen",
+            command=self.guardar_producto_db
+        )
+        btn_guardar_prod.grid(row=0, column=3, padx=10, pady=10)
+
+        # Configurar la tabla para mostrar los productos
+        estilo = ttk.Style()
+        estilo.theme_use("default")
+        estilo.configure("Treeview", background="#2a2d2e", foreground="white", rowheight=25, fieldbackground="#343638")
+        estilo.map('Treeview', background=[('selected', '#22559b')])
+
+        self.tabla_productos = ttk.Treeview(self.home_frame, columns=("ID", "Nombre", "Categoría", "Precio"), show="headings")
+        self.tabla_productos.heading("ID", text="ID")
+        self.tabla_productos.heading("Nombre", text="Nombre")
+        self.tabla_productos.heading("Categoría", text="Categoría")
+        self.tabla_productos.heading("Precio", text="Precio ($)")
+        
+        self.tabla_productos.column("ID", width=50, anchor="center")
+        self.tabla_productos.column("Precio", width=100, anchor="center")
+        
+        self.tabla_productos.pack(pady=20, padx=20, fill="both", expand=True)
+
+    # Función temporal para el botón Guardar
+    def guardar_producto_db(self):
+        print(f"Guardando: {self.entry_nombre_prod.get()} - {self.menu_categoria.get()} - {self.entry_precio_prod.get()}$")
 
     def change_appearance_mode_event(self, new_appearance_mode):
         ctk.set_appearance_mode(new_appearance_mode)
