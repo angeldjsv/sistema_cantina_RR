@@ -1,304 +1,495 @@
 import customtkinter as ctk
-from PIL import Image # La usaremos más adelante para iconos
-from tkinter import ttk
+from tkinter import ttk, messagebox
 from conexion import conectar
-from tkinter import messagebox # Para mostrar alertas de "Guardado con éxito"
 
-# Configuración estética global
-ctk.set_appearance_mode("dark")  # Modos: "System" (standard), "Dark", "Light"
-ctk.set_default_color_theme("blue")  # Temas: "blue" (standard), "green", "dark-blue"
+# ============================================================
+# CONFIGURACIÓN ESTÉTICA GLOBAL
+# ============================================================
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
 
+# ============================================================
+# CLASE PRINCIPAL
+# ============================================================
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        # Configuración de la ventana
-        self.title("Sistema de Gestión Cantina R.R.")
-        self.geometry("1000x600")
+        self.title("Sistema de Gestión - Cantina R.R.")
+        self.geometry("1100x650")
 
-        # Configurar el diseño de cuadrícula (Grid) 1x2
+        # Tasa BCV activa (se carga al iniciar)
+        self.tasa_bcv = self.obtener_tasa_bcv()
+
+        # Carrito de compras (lista de dicts)
+        self.carrito = []
+
+        # Grid principal: columna 0 = nav, columna 1 = contenido
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        # --- NAVEGACIÓN LATERAL (BARRA IZQUIERDA) ---
+        # ── BARRA DE NAVEGACIÓN LATERAL ──────────────────────
         self.navigation_frame = ctk.CTkFrame(self, corner_radius=0)
         self.navigation_frame.grid(row=0, column=0, sticky="nsew")
-        self.navigation_frame.grid_rowconfigure(5, weight=1)
+        self.navigation_frame.grid_rowconfigure(6, weight=1)
 
-        self.navigation_frame_label = ctk.CTkLabel(
-            self.navigation_frame, text="  CANTINA R.R.", 
+        ctk.CTkLabel(
+            self.navigation_frame, text="  CANTINA R.R.",
             font=ctk.CTkFont(size=20, weight="bold")
-        )
-        self.navigation_frame_label.grid(row=0, column=0, padx=20, pady=20)
+        ).grid(row=0, column=0, padx=20, pady=20)
 
-        # Botones de navegación
-        self.btn_pos = ctk.CTkButton(
-            self.navigation_frame, corner_radius=0, height=40, border_spacing=10, 
-            text="Punto de Venta", fg_color="transparent", text_color=("gray10", "gray90"), 
-            hover_color=("gray70", "gray30"), anchor="w", command=self.pos_button_event
+        # Tasa BCV en la barra lateral
+        self.label_tasa_nav = ctk.CTkLabel(
+            self.navigation_frame,
+            text=f"Tasa BCV:\nBs. {self.tasa_bcv:,.2f}",
+            font=ctk.CTkFont(size=12),
+            text_color="lightgreen"
         )
-        self.btn_pos.grid(row=1, column=0, sticky="ew")
+        self.label_tasa_nav.grid(row=1, column=0, padx=20, pady=(0, 10))
 
-        self.btn_cuentas = ctk.CTkButton(
-            self.navigation_frame, corner_radius=0, height=40, border_spacing=10, 
-            text="Gestión de Cuentas", fg_color="transparent", text_color=("gray10", "gray90"), 
-            hover_color=("gray70", "gray30"), anchor="w", command=self.cuentas_button_event
-        )
-        self.btn_cuentas.grid(row=2, column=0, sticky="ew")
+        nav_buttons = [
+            ("🛒  Punto de Venta",       self.pos_button_event,       2),
+            ("👥  Gestión de Cuentas",   self.cuentas_button_event,   3),
+            ("🍔  Menú / Productos",     self.productos_button_event, 4),
+        ]
+        for texto, comando, fila in nav_buttons:
+            ctk.CTkButton(
+                self.navigation_frame, corner_radius=0, height=40,
+                border_spacing=10, text=texto, fg_color="transparent",
+                text_color=("gray10", "gray90"), hover_color=("gray70", "gray30"),
+                anchor="w", command=comando
+            ).grid(row=fila, column=0, sticky="ew")
 
-        self.btn_productos = ctk.CTkButton(
-            self.navigation_frame, corner_radius=0, height=40, border_spacing=10, 
-            text="Menú / Productos", fg_color="transparent", text_color=("gray10", "gray90"), 
-            hover_color=("gray70", "gray30"), anchor="w", command=self.productos_button_event
-        )
-        self.btn_productos.grid(row=3, column=0, sticky="ew")
-
-        # Selector de Modo (Oscuro/Claro) al final de la barra
         self.appearance_mode_menu = ctk.CTkOptionMenu(
             self.navigation_frame, values=["Dark", "Light", "System"],
-            command=self.change_appearance_mode_event
+            command=lambda m: ctk.set_appearance_mode(m)
         )
-        self.appearance_mode_menu.grid(row=6, column=0, padx=20, pady=20, sticky="s")
+        self.appearance_mode_menu.grid(row=7, column=0, padx=20, pady=20, sticky="s")
 
-        # --- CONTENIDO PRINCIPAL (DERECHA) ---
+        # ── PANEL DE CONTENIDO PRINCIPAL ─────────────────────
         self.home_frame = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
         self.home_frame.grid(row=0, column=1, sticky="nsew")
-        
-        self.main_label = ctk.CTkLabel(
-            self.home_frame, text="Bienvenido al Sistema de Gestión", 
-            font=ctk.CTkFont(size=24, weight="bold")
-        )
-        self.main_label.pack(pady=40)
 
-    # --- FUNCIONES DE LOS EVENTOS ---
+        # Pantalla de bienvenida
+        ctk.CTkLabel(
+            self.home_frame,
+            text="Bienvenido al Sistema de Gestión\nCantina Escolar R.R.",
+            font=ctk.CTkFont(size=24, weight="bold")
+        ).pack(pady=80)
+        ctk.CTkLabel(
+            self.home_frame,
+            text=f"Tasa BCV activa: Bs. {self.tasa_bcv:,.2f}",
+            font=ctk.CTkFont(size=14),
+            text_color="lightgreen"
+        ).pack()
+
+    # ============================================================
+    # UTILIDADES GENERALES
+    # ============================================================
     def limpiar_panel_derecho(self):
         for widget in self.home_frame.winfo_children():
             widget.destroy()
+        # Resetear configuración de grid del panel
+        self.home_frame.grid_columnconfigure(0, weight=0)
+        self.home_frame.grid_columnconfigure(1, weight=0)
 
+    def obtener_tasa_bcv(self):
+        """Obtiene la tasa BCV más reciente guardada en la base de datos."""
+        con = conectar()
+        if con:
+            try:
+                cursor = con.cursor()
+                cursor.execute("SELECT tasa FROM tasa_bcv ORDER BY fecha DESC LIMIT 1")
+                resultado = cursor.fetchone()
+                con.close()
+                if resultado:
+                    return float(resultado[0])
+            except Exception:
+                pass
+        return 1.0  # Valor de seguridad si no hay conexión
+
+    # ============================================================
+    # MÓDULO: PUNTO DE VENTA (POS)
+    # ============================================================
     def pos_button_event(self):
         self.limpiar_panel_derecho()
+        self.carrito = []
 
-        # Configurar rejilla para el POS (1 fila, 2 columnas con pesos distintos)
-        self.home_frame.grid_columnconfigure(0, weight=1) # Columna de productos
-        self.home_frame.grid_columnconfigure(1, weight=0) # Columna de carrito (fija)
+        self.home_frame.grid_columnconfigure(0, weight=1)
+        self.home_frame.grid_columnconfigure(1, weight=0)
+        self.home_frame.grid_rowconfigure(0, weight=1)
 
-        # --- COLUMNA IZQUIERDA: PRODUCTOS ---
+        # ── COLUMNA IZQUIERDA: PRODUCTOS ─────────────────────
         frame_productos = ctk.CTkFrame(self.home_frame)
         frame_productos.grid(row=0, column=0, padx=10, pady=10, sticky="nsew")
+        frame_productos.grid_rowconfigure(2, weight=1)
+        frame_productos.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(frame_productos, text="Venta de Productos", font=ctk.CTkFont(size=20, weight="bold")).pack(pady=10)
+        ctk.CTkLabel(
+            frame_productos, text="Productos Disponibles",
+            font=ctk.CTkFont(size=18, weight="bold")
+        ).grid(row=0, column=0, pady=10)
 
-        # Buscador rápido
-        self.entry_buscar_pos = ctk.CTkEntry(frame_productos, placeholder_text="Buscar producto...", width=300)
-        self.entry_buscar_pos.pack(pady=5)
-        # Nota: Aquí conectaremos luego un evento para filtrar mientras escribes
+        # Buscador
+        self.entry_buscar_pos = ctk.CTkEntry(
+            frame_productos, placeholder_text="🔍 Buscar producto...", width=320
+        )
+        self.entry_buscar_pos.grid(row=1, column=0, pady=5, padx=10)
+        self.entry_buscar_pos.bind("<KeyRelease>", self.filtrar_productos_pos)
 
-        # Tabla de productos disponibles
-        self.tabla_pos_prod = ttk.Treeview(frame_productos, columns=("ID", "Producto", "Precio"), show="headings", height=12)
-        self.tabla_pos_prod.heading("ID", text="ID")
-        self.tabla_pos_prod.heading("Producto", text="Producto")
-        self.tabla_pos_prod.heading("Precio", text="Precio ($)")
-        self.tabla_pos_prod.column("ID", width=50)
-        self.tabla_pos_prod.pack(padx=10, pady=10, fill="both", expand=True)
-        
-        btn_al_carrito = ctk.CTkButton(frame_productos, text="🛒 Añadir al Carrito", fg_color="#2c3e50")
-        btn_al_carrito.pack(pady=10)
+        # Tabla productos
+        cols_prod = ("ID", "Producto", "Precio $", "Precio Bs.")
+        self.tabla_pos_prod = ttk.Treeview(
+            frame_productos, columns=cols_prod, show="headings", height=16
+        )
+        for col in cols_prod:
+            self.tabla_pos_prod.heading(col, text=col)
+        self.tabla_pos_prod.column("ID",         width=40,  anchor="center")
+        self.tabla_pos_prod.column("Producto",   width=200)
+        self.tabla_pos_prod.column("Precio $",   width=80,  anchor="center")
+        self.tabla_pos_prod.column("Precio Bs.", width=100, anchor="center")
+        self.tabla_pos_prod.grid(row=2, column=0, padx=10, pady=5, sticky="nsew")
 
-        # --- COLUMNA DERECHA: CARRITO Y COBRO ---
-        frame_carrito = ctk.CTkFrame(self.home_frame, width=350, fg_color=("#dbdbdb", "#2b2b2b"))
+        # Doble clic para añadir al carrito
+        self.tabla_pos_prod.bind("<Double-1>", self.añadir_al_carrito)
+
+        ctk.CTkButton(
+            frame_productos, text="🛒  Añadir al Carrito  (o doble clic)",
+            fg_color="#1f538d", command=self.añadir_al_carrito
+        ).grid(row=3, column=0, pady=10, padx=10, sticky="ew")
+
+        # ── COLUMNA DERECHA: CARRITO Y COBRO ─────────────────
+        frame_carrito = ctk.CTkFrame(self.home_frame, width=370, fg_color=("#dbdbdb", "#2b2b2b"))
         frame_carrito.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
+        frame_carrito.grid_rowconfigure(1, weight=1)
 
-        ctk.CTkLabel(frame_carrito, text="Carrito de Compras", font=ctk.CTkFont(size=18, weight="bold")).pack(pady=10)
+        ctk.CTkLabel(
+            frame_carrito, text="Carrito de Compras",
+            font=ctk.CTkFont(size=18, weight="bold")
+        ).grid(row=0, column=0, columnspan=2, pady=10)
 
-        self.tabla_carrito = ttk.Treeview(frame_carrito, columns=("Prod", "Cant", "Subt"), show="headings", height=10)
-        self.tabla_carrito.heading("Prod", text="Prod")
-        self.tabla_carrito.heading("Cant", text="Cant")
-        self.tabla_carrito.heading("Subt", text="Subt")
-        self.tabla_carrito.column("Cant", width=50)
-        self.tabla_carrito.pack(padx=10, pady=10, fill="x")
+        cols_cart = ("Producto", "Cant.", "Subtotal $")
+        self.tabla_carrito = ttk.Treeview(
+            frame_carrito, columns=cols_cart, show="headings", height=12
+        )
+        for col in cols_cart:
+            self.tabla_carrito.heading(col, text=col)
+        self.tabla_carrito.column("Producto",    width=160)
+        self.tabla_carrito.column("Cant.",       width=50,  anchor="center")
+        self.tabla_carrito.column("Subtotal $",  width=90,  anchor="center")
+        self.tabla_carrito.grid(row=1, column=0, columnspan=2, padx=10, pady=5, sticky="nsew")
 
-        # TOTAL
-        self.label_total = ctk.CTkLabel(frame_carrito, text="TOTAL: $0.00", font=ctk.CTkFont(size=22, weight="bold"), text_color="green")
-        self.label_total.pack(pady=20)
+        ctk.CTkButton(
+            frame_carrito, text="🗑️  Quitar seleccionado",
+            fg_color="#7f0000", width=160, command=self.quitar_del_carrito
+        ).grid(row=2, column=0, padx=5, pady=5)
 
-        # Selección de Cliente/Cuenta
-        ctk.CTkLabel(frame_carrito, text="Asignar a Cuenta:").pack()
-        self.combo_cuentas_pos = ctk.CTkOptionMenu(frame_carrito, values=["Cargando cuentas..."], width=250)
-        self.combo_cuentas_pos.pack(pady=10)
+        ctk.CTkButton(
+            frame_carrito, text="🧹  Vaciar carrito",
+            fg_color="#555", width=160, command=self.vaciar_carrito
+        ).grid(row=2, column=1, padx=5, pady=5)
 
-        btn_finalizar = ctk.CTkButton(frame_carrito, text="FINALIZAR VENTA", fg_color="green", height=50, font=ctk.CTkFont(weight="bold"))
-        btn_finalizar.pack(pady=20, padx=20, fill="x")
-        
-        self.cargar_productos_pos() # Función que llenará la tabla de la izquierda
+        # Totales
+        self.label_total_usd = ctk.CTkLabel(
+            frame_carrito, text="TOTAL: $0.00",
+            font=ctk.CTkFont(size=22, weight="bold"), text_color="lightgreen"
+        )
+        self.label_total_usd.grid(row=3, column=0, columnspan=2, pady=(15, 2))
 
-    def cargar_productos_pos(self):
+        self.label_total_bs = ctk.CTkLabel(
+            frame_carrito, text="Bs. 0,00",
+            font=ctk.CTkFont(size=14), text_color="lightyellow"
+        )
+        self.label_total_bs.grid(row=4, column=0, columnspan=2, pady=(0, 10))
+
+        # Cuenta
+        ctk.CTkLabel(frame_carrito, text="Asignar a cuenta:").grid(
+            row=5, column=0, columnspan=2
+        )
+        self.combo_cuentas_pos = ctk.CTkOptionMenu(
+            frame_carrito, values=["Seleccionar cuenta..."], width=320
+        )
+        self.combo_cuentas_pos.grid(row=6, column=0, columnspan=2, pady=8, padx=10)
+
+        # Método de pago
+        ctk.CTkLabel(frame_carrito, text="Método de pago:").grid(
+            row=7, column=0, columnspan=2
+        )
+        self.combo_metodo_pago = ctk.CTkOptionMenu(
+            frame_carrito,
+            values=["Efectivo", "Pago Móvil", "Transferencia", "Pendiente"],
+            width=320
+        )
+        self.combo_metodo_pago.grid(row=8, column=0, columnspan=2, pady=8, padx=10)
+
+        ctk.CTkButton(
+            frame_carrito, text="✅  FINALIZAR VENTA",
+            fg_color="green", height=50,
+            font=ctk.CTkFont(size=16, weight="bold"),
+            command=self.finalizar_venta
+        ).grid(row=9, column=0, columnspan=2, pady=15, padx=20, sticky="ew")
+
+        self.cargar_productos_pos()
+        self.cargar_cuentas_combo()
+
+    def cargar_productos_pos(self, filtro=""):
         for item in self.tabla_pos_prod.get_children():
             self.tabla_pos_prod.delete(item)
         con = conectar()
         if con:
             cursor = con.cursor()
-            cursor.execute("SELECT id_producto, nombre, precio FROM productos WHERE estado = 'Disponible'")
+            if filtro:
+                cursor.execute(
+                    "SELECT id_producto, nombre, precio_usd FROM productos "
+                    "WHERE estado='Disponible' AND nombre LIKE %s ORDER BY categoria, nombre",
+                    (f"%{filtro}%",)
+                )
+            else:
+                cursor.execute(
+                    "SELECT id_producto, nombre, precio_usd FROM productos "
+                    "WHERE estado='Disponible' ORDER BY categoria, nombre"
+                )
             for fila in cursor.fetchall():
-                self.tabla_pos_prod.insert("", "end", values=fila)
+                precio_usd = float(fila[2])
+                precio_bs  = precio_usd * self.tasa_bcv
+                self.tabla_pos_prod.insert("", "end", values=(
+                    fila[0], fila[1],
+                    f"${precio_usd:.2f}",
+                    f"Bs. {precio_bs:,.2f}"
+                ))
             con.close()
 
+    def filtrar_productos_pos(self, event=None):
+        self.cargar_productos_pos(filtro=self.entry_buscar_pos.get())
+
+    def añadir_al_carrito(self, event=None):
+        seleccion = self.tabla_pos_prod.selection()
+        if not seleccion:
+            return
+        item = self.tabla_pos_prod.item(seleccion[0])
+        id_prod, nombre, precio_str, _ = item["values"]
+        precio_usd = float(precio_str.replace("$", ""))
+
+        # Si ya está en el carrito, aumentar cantidad
+        for prod in self.carrito:
+            if prod["id"] == id_prod:
+                prod["cantidad"] += 1
+                prod["subtotal"] = round(prod["cantidad"] * prod["precio"], 2)
+                self.actualizar_tabla_carrito()
+                return
+
+        self.carrito.append({
+            "id": id_prod, "nombre": nombre,
+            "precio": precio_usd, "cantidad": 1,
+            "subtotal": precio_usd
+        })
+        self.actualizar_tabla_carrito()
+
+    def quitar_del_carrito(self):
+        seleccion = self.tabla_carrito.selection()
+        if not seleccion:
+            return
+        idx = self.tabla_carrito.index(seleccion[0])
+        del self.carrito[idx]
+        self.actualizar_tabla_carrito()
+
+    def vaciar_carrito(self):
+        self.carrito = []
+        self.actualizar_tabla_carrito()
+
+    def actualizar_tabla_carrito(self):
+        for item in self.tabla_carrito.get_children():
+            self.tabla_carrito.delete(item)
+        total_usd = 0.0
+        for prod in self.carrito:
+            self.tabla_carrito.insert("", "end", values=(
+                prod["nombre"], prod["cantidad"], f"${prod['subtotal']:.2f}"
+            ))
+            total_usd += prod["subtotal"]
+        total_bs = total_usd * self.tasa_bcv
+        self.label_total_usd.configure(text=f"TOTAL: ${total_usd:.2f}")
+        self.label_total_bs.configure(text=f"Bs. {total_bs:,.2f}")
+
+    def cargar_cuentas_combo(self):
+        con = conectar()
+        if con:
+            cursor = con.cursor()
+            cursor.execute("SELECT id_cuenta, nombre_referencia FROM cuentas ORDER BY nombre_referencia")
+            filas = cursor.fetchall()
+            con.close()
+            if filas:
+                self.cuentas_map = {f"{f[1]} (ID:{f[0]})": f[0] for f in filas}
+                self.combo_cuentas_pos.configure(values=list(self.cuentas_map.keys()))
+                self.combo_cuentas_pos.set(list(self.cuentas_map.keys())[0])
+            else:
+                self.cuentas_map = {}
+                self.combo_cuentas_pos.configure(values=["Sin cuentas registradas"])
+
+    def finalizar_venta(self):
+        if not self.carrito:
+            messagebox.showwarning("Carrito vacío", "Agrega productos antes de finalizar.")
+            return
+
+        cuenta_sel = self.combo_cuentas_pos.get()
+        if "ID:" not in cuenta_sel:
+            messagebox.showwarning("Sin cuenta", "Selecciona una cuenta válida.")
+            return
+
+        id_cuenta   = self.cuentas_map[cuenta_sel]
+        metodo      = self.combo_metodo_pago.get()
+        total_usd   = sum(p["subtotal"] for p in self.carrito)
+        total_bs    = round(total_usd * self.tasa_bcv, 2)
+
+        con = conectar()
+        if con:
+            try:
+                cursor = con.cursor()
+
+                # 1. Insertar transacción
+                cursor.execute(
+                    "INSERT INTO transacciones "
+                    "(id_cuenta, tipo, monto_total_usd, monto_total_bs, tasa_aplicada, metodo_pago) "
+                    "VALUES (%s, 'Consumo', %s, %s, %s, %s)",
+                    (id_cuenta, total_usd, total_bs, self.tasa_bcv, metodo)
+                )
+                id_trans = cursor.lastrowid
+
+                # 2. Insertar detalles
+                for prod in self.carrito:
+                    cursor.execute(
+                        "INSERT INTO detalles_transaccion "
+                        "(id_transaccion, id_producto, cantidad, precio_unitario_usd, subtotal_usd) "
+                        "VALUES (%s, %s, %s, %s, %s)",
+                        (id_trans, prod["id"], prod["cantidad"], prod["precio"], prod["subtotal"])
+                    )
+
+                # 3. Actualizar saldo de la cuenta
+                if metodo == "Pendiente":
+                    cursor.execute(
+                        "UPDATE cuentas SET saldo_deuda = saldo_deuda + %s WHERE id_cuenta = %s",
+                        (total_usd, id_cuenta)
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE cuentas SET saldo_favor = saldo_favor + %s WHERE id_cuenta = %s",
+                        (total_usd, id_cuenta)
+                    )
+
+                con.commit()
+                con.close()
+
+                messagebox.showinfo(
+                    "Venta Registrada ✅",
+                    f"Venta finalizada correctamente.\n\n"
+                    f"Total: ${total_usd:.2f} / Bs. {total_bs:,.2f}\n"
+                    f"Método: {metodo}\n"
+                    f"Cuenta: {cuenta_sel}"
+                )
+                self.vaciar_carrito()
+
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo registrar la venta:\n{e}")
+
+    # ============================================================
+    # MÓDULO: GESTIÓN DE CUENTAS
+    # ============================================================
     def cuentas_button_event(self):
         self.limpiar_panel_derecho()
 
-        # Título
-        titulo = ctk.CTkLabel(self.home_frame, text="Gestión de Cuentas y Familias", font=ctk.CTkFont(size=24, weight="bold"))
-        titulo.pack(pady=20)
+        ctk.CTkLabel(
+            self.home_frame, text="Gestión de Cuentas y Personas",
+            font=ctk.CTkFont(size=24, weight="bold")
+        ).pack(pady=20)
 
-        # --- FORMULARIO DE CUENTA ---
-        frame_form_cuenta = ctk.CTkFrame(self.home_frame)
-        frame_form_cuenta.pack(pady=10, padx=20, fill="x")
+        # Formulario nueva cuenta
+        frame_form = ctk.CTkFrame(self.home_frame)
+        frame_form.pack(pady=5, padx=20, fill="x")
 
-        self.entry_ref_cuenta = ctk.CTkEntry(frame_form_cuenta, placeholder_text="Nombre Ref (Ej: Familia Perez)", width=250)
+        self.entry_ref_cuenta = ctk.CTkEntry(
+            frame_form, placeholder_text="Nombre Ref. (Ej: Familia Pérez)", width=250
+        )
         self.entry_ref_cuenta.grid(row=0, column=0, padx=10, pady=10)
 
-        self.entry_tel_cuenta = ctk.CTkEntry(frame_form_cuenta, placeholder_text="Teléfono", width=150)
+        self.entry_tel_cuenta = ctk.CTkEntry(
+            frame_form, placeholder_text="Teléfono", width=160
+        )
         self.entry_tel_cuenta.grid(row=0, column=1, padx=10, pady=10)
 
-        self.menu_tipo_usuario = ctk.CTkOptionMenu(frame_form_cuenta, values=["Estudiante", "Docente", "Obrero", "Administrativo"])
+        self.menu_tipo_usuario = ctk.CTkOptionMenu(
+            frame_form, values=["Estudiante", "Docente", "Obrero", "Administrativo"]
+        )
         self.menu_tipo_usuario.grid(row=0, column=2, padx=10, pady=10)
 
-        btn_guardar_cuenta = ctk.CTkButton(frame_form_cuenta, text="Crear Cuenta", fg_color="green", command=self.guardar_cuenta_db)
-        btn_guardar_cuenta.grid(row=0, column=3, padx=10, pady=10)
+        ctk.CTkButton(
+            frame_form, text="➕ Crear Cuenta", fg_color="green",
+            command=self.guardar_cuenta_db
+        ).grid(row=0, column=3, padx=10, pady=10)
 
-        # --- TABLA DE CUENTAS (Principal) ---
-        self.tabla_cuentas = ttk.Treeview(self.home_frame, columns=("ID", "Referencia", "Teléfono", "Tipo", "Deuda", "A Favor"), show="headings")
-        self.tabla_cuentas.heading("ID", text="ID")
-        self.tabla_cuentas.heading("Referencia", text="Referencia")
-        self.tabla_cuentas.heading("Teléfono", text="Teléfono")
-        self.tabla_cuentas.heading("Tipo", text="Tipo")
-        self.tabla_cuentas.heading("Deuda", text="Saldo Deuda ($)")
-        self.tabla_cuentas.heading("A Favor", text="Saldo Favor ($)")
-        
-        # Ajustar anchos
-        self.tabla_cuentas.column("ID", width=50)
-        self.tabla_cuentas.column("Referencia", width=200)
-        
-        self.tabla_cuentas.pack(pady=10, padx=20, fill="both", expand=True)
-        
-        self.cargar_cuentas()
-
-        # --- 1. DISPARADOR DE SELECCIÓN ---
-        # Esto avisa al sistema cuando haces clic en una fila de la tabla superior
+        # Tabla de cuentas
+        self.tabla_cuentas = ttk.Treeview(
+            self.home_frame,
+            columns=("ID", "Referencia", "Teléfono", "Tipo", "Deuda $", "A Favor $"),
+            show="headings"
+        )
+        for col in ("ID", "Referencia", "Teléfono", "Tipo", "Deuda $", "A Favor $"):
+            self.tabla_cuentas.heading(col, text=col)
+        self.tabla_cuentas.column("ID",        width=40,  anchor="center")
+        self.tabla_cuentas.column("Referencia",width=200)
+        self.tabla_cuentas.column("Teléfono",  width=130)
+        self.tabla_cuentas.column("Tipo",      width=110, anchor="center")
+        self.tabla_cuentas.column("Deuda $",   width=90,  anchor="center")
+        self.tabla_cuentas.column("A Favor $", width=90,  anchor="center")
+        self.tabla_cuentas.pack(pady=5, padx=20, fill="both", expand=True)
         self.tabla_cuentas.bind("<<TreeviewSelect>>", self.on_cuenta_select)
 
-        # --- 2. TABLA SECUNDARIA (Estudiantes Asociados) ---
-        ctk.CTkLabel(self.home_frame, text="Estudiantes vinculados a la cuenta seleccionada:", 
-                    font=ctk.CTkFont(size=16, weight="bold")).pack(pady=(10, 0))
+        self.cargar_cuentas()
 
-        self.tabla_estudiantes_asociados = ttk.Treeview(
-            self.home_frame, 
-            columns=("Nombre", "Apellido", "Grado"), 
-            show="headings", 
-            height=4 # Altura reducida para que quepa bien en la pantalla
+        # Tabla personas asociadas
+        ctk.CTkLabel(
+            self.home_frame,
+            text="Personas vinculadas a la cuenta seleccionada:",
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(pady=(8, 0))
+
+        self.tabla_personas_asociadas = ttk.Treeview(
+            self.home_frame,
+            columns=("Nombre", "Apellido", "Tipo", "Grado/Sección"),
+            show="headings", height=4
         )
-        self.tabla_estudiantes_asociados.heading("Nombre", text="Nombre")
-        self.tabla_estudiantes_asociados.heading("Apellido", text="Apellido")
-        self.tabla_estudiantes_asociados.heading("Grado", text="Grado")
-        
-        self.tabla_estudiantes_asociados.pack(pady=10, padx=20, fill="x")
+        for col in ("Nombre", "Apellido", "Tipo", "Grado/Sección"):
+            self.tabla_personas_asociadas.heading(col, text=col)
+        self.tabla_personas_asociadas.pack(pady=5, padx=20, fill="x")
 
-        # --- 3. BOTÓN MOVIDO AL FINAL ---
-        btn_agregar_est = ctk.CTkButton(
-            self.home_frame, 
-            text="➕ Vincular Nuevo Estudiante", 
-            fg_color="#1f538d", 
-            command=self.abrir_ventana_estudiante
-        )
-        btn_agregar_est.pack(pady=(0, 10))
+        ctk.CTkButton(
+            self.home_frame, text="➕ Vincular Persona a esta Cuenta",
+            fg_color="#1f538d", command=self.abrir_ventana_persona
+        ).pack(pady=(0, 10))
 
-    def abrir_ventana_estudiante(self):
-        # 1. Verificar si hay una cuenta seleccionada en la tabla
-        seleccion = self.tabla_cuentas.selection()
-        if not seleccion:
-            messagebox.showwarning("Atención", "Debes hacer clic en una cuenta de la tabla primero.")
-            return
-        
-        # 2. Extraer los datos de la fila seleccionada
-        item = self.tabla_cuentas.item(seleccion[0])
-        id_cuenta = item['values'][0]
-        nombre_cuenta = item['values'][1]
-        tipo_cuenta = item['values'][3]
-
-        # Si es un docente u obrero, no le asociamos niños
-        if tipo_cuenta != "Estudiante":
-            messagebox.showinfo("Aviso", "Esta cuenta pertenece a Personal. No requiere asociar estudiantes.")
-            return
-
-        # 3. Crear la ventana emergente
-        ventana_est = ctk.CTkToplevel(self)
-        ventana_est.title(f"Añadir a: {nombre_cuenta}")
-        ventana_est.geometry("400x400")
-        ventana_est.grab_set() # Hace que no puedas tocar la ventana de atrás hasta cerrar esta
-
-        ctk.CTkLabel(ventana_est, text="Nombre del Estudiante:", font=("Arial", 14)).pack(pady=(20, 5))
-        entry_nom = ctk.CTkEntry(ventana_est, width=250)
-        entry_nom.pack(pady=5)
-
-        ctk.CTkLabel(ventana_est, text="Apellido del Estudiante:", font=("Arial", 14)).pack(pady=5)
-        entry_ape = ctk.CTkEntry(ventana_est, width=250)
-        entry_ape.pack(pady=5)
-
-        ctk.CTkLabel(ventana_est, text="Grado y Sección:", font=("Arial", 14)).pack(pady=5)
-        entry_grado = ctk.CTkEntry(ventana_est, width=250, placeholder_text="Ej: 5to A")
-        entry_grado.pack(pady=5)
-
-        # 4. Botón que dispara el guardado en base de datos
-        btn_guardar = ctk.CTkButton(
-            ventana_est, text="Guardar Estudiante", fg_color="green", 
-            command=lambda: self.guardar_estudiante_db(id_cuenta, entry_nom.get(), entry_ape.get(), entry_grado.get(), ventana_est)
-        )
-        btn_guardar.pack(pady=30)
-
-    def guardar_estudiante_db(self, id_cuenta, nombre, apellido, grado, ventana):
-        if not nombre or not apellido or not grado:
-            messagebox.showwarning("Atención", "Todos los campos son obligatorios.")
-            return
-        
-        con = conectar()
-        if con:
-            try:
-                cursor = con.cursor()
-                # OJO: Tu tabla usa la columna "grado", asegúrate que coincida.
-                sql = "INSERT INTO estudiantes (nombre, apellido, grado, id_cuenta) VALUES (%s, %s, %s, %s)"
-                cursor.execute(sql, (nombre, apellido, grado, id_cuenta))
-                con.commit()
-                con.close()
-                
-                messagebox.showinfo("Éxito", f"Estudiante {nombre} {apellido} asignado correctamente.")
-                self.cargar_estudiantes_asociados(id_cuenta) # Refrescar la lista de niños
-                ventana.destroy() # Cierra la ventanita emergente
-            except Exception as e:
-                messagebox.showerror("Error", f"Ocurrió un error en la base de datos: {e}")
-
-    # --- LÓGICA DE BASE DE DATOS PARA CUENTAS ---
     def guardar_cuenta_db(self):
-        ref = self.entry_ref_cuenta.get()
-        tel = self.entry_tel_cuenta.get()
+        ref  = self.entry_ref_cuenta.get().strip()
+        tel  = self.entry_tel_cuenta.get().strip()
         tipo = self.menu_tipo_usuario.get()
 
         if not ref or not tel:
-            messagebox.showwarning("Atención", "Nombre de referencia y teléfono son obligatorios")
+            messagebox.showwarning("Atención", "Nombre de referencia y teléfono son obligatorios.")
             return
 
         con = conectar()
         if con:
             try:
                 cursor = con.cursor()
-                sql = "INSERT INTO cuentas (nombre_referencia, telefono, tipo_usuario) VALUES (%s, %s, %s)"
-                cursor.execute(sql, (ref, tel, tipo))
+                cursor.execute(
+                    "INSERT INTO cuentas (nombre_referencia, telefono, tipo_usuario) VALUES (%s, %s, %s)",
+                    (ref, tel, tipo)
+                )
                 con.commit()
                 con.close()
-                messagebox.showinfo("Éxito", f"Cuenta '{ref}' creada.")
-                self.entry_ref_cuenta.delete(0, 'end')
-                self.entry_tel_cuenta.delete(0, 'end')
+                messagebox.showinfo("Éxito", f"Cuenta '{ref}' creada correctamente.")
+                self.entry_ref_cuenta.delete(0, "end")
+                self.entry_tel_cuenta.delete(0, "end")
                 self.cargar_cuentas()
             except Exception as e:
-                messagebox.showerror("Error", f"Error al crear cuenta: {e}")
+                messagebox.showerror("Error", f"No se pudo crear la cuenta:\n{e}")
 
     def cargar_cuentas(self):
         for item in self.tabla_cuentas.get_children():
@@ -306,131 +497,207 @@ class App(ctk.CTk):
         con = conectar()
         if con:
             cursor = con.cursor()
-            cursor.execute("SELECT id_cuenta, nombre_referencia, telefono, tipo_usuario, saldo_deuda, saldo_favor FROM cuentas")
+            cursor.execute(
+                "SELECT id_cuenta, nombre_referencia, telefono, tipo_usuario, "
+                "saldo_deuda, saldo_favor FROM cuentas ORDER BY nombre_referencia"
+            )
             for fila in cursor.fetchall():
                 self.tabla_cuentas.insert("", "end", values=fila)
             con.close()
 
+    def on_cuenta_select(self, event=None):
+        seleccion = self.tabla_cuentas.selection()
+        if seleccion:
+            id_cuenta = self.tabla_cuentas.item(seleccion[0])["values"][0]
+            self.cargar_personas_asociadas(id_cuenta)
+
+    def cargar_personas_asociadas(self, id_cuenta):
+        for item in self.tabla_personas_asociadas.get_children():
+            self.tabla_personas_asociadas.delete(item)
+        con = conectar()
+        if con:
+            cursor = con.cursor()
+            cursor.execute(
+                "SELECT nombre, apellido, tipo, grado_seccion FROM personas WHERE id_cuenta = %s",
+                (id_cuenta,)
+            )
+            for fila in cursor.fetchall():
+                self.tabla_personas_asociadas.insert("", "end", values=fila)
+            con.close()
+
+    def abrir_ventana_persona(self):
+        seleccion = self.tabla_cuentas.selection()
+        if not seleccion:
+            messagebox.showwarning("Atención", "Selecciona primero una cuenta de la tabla.")
+            return
+
+        item       = self.tabla_cuentas.item(seleccion[0])
+        id_cuenta  = item["values"][0]
+        nom_cuenta = item["values"][1]
+
+        ventana = ctk.CTkToplevel(self)
+        ventana.title(f"Vincular persona a: {nom_cuenta}")
+        ventana.geometry("420x420")
+        ventana.grab_set()
+
+        campos = [
+            ("Nombre:",         "entry_pnombre",  None),
+            ("Apellido:",       "entry_papellido", None),
+            ("Grado/Sección:",  "entry_pgrado",   "Ej: 5to A  (dejar vacío si no aplica)"),
+        ]
+        entries = {}
+        for label, key, ph in campos:
+            ctk.CTkLabel(ventana, text=label, font=("Arial", 13)).pack(pady=(12, 2))
+            e = ctk.CTkEntry(ventana, width=280, placeholder_text=ph or "")
+            e.pack()
+            entries[key] = e
+
+        ctk.CTkLabel(ventana, text="Tipo:", font=("Arial", 13)).pack(pady=(12, 2))
+        menu_tipo = ctk.CTkOptionMenu(
+            ventana, values=["Estudiante", "Docente", "Obrero", "Administrativo"], width=280
+        )
+        menu_tipo.pack()
+
+        ctk.CTkButton(
+            ventana, text="💾 Guardar", fg_color="green", width=200,
+            command=lambda: self.guardar_persona_db(
+                id_cuenta,
+                entries["entry_pnombre"].get(),
+                entries["entry_papellido"].get(),
+                entries["entry_pgrado"].get(),
+                menu_tipo.get(),
+                ventana
+            )
+        ).pack(pady=25)
+
+    def guardar_persona_db(self, id_cuenta, nombre, apellido, grado, tipo, ventana):
+        if not nombre.strip() or not apellido.strip():
+            messagebox.showwarning("Atención", "Nombre y apellido son obligatorios.")
+            return
+        con = conectar()
+        if con:
+            try:
+                cursor = con.cursor()
+                cursor.execute(
+                    "INSERT INTO personas (nombre, apellido, tipo, grado_seccion, id_cuenta) "
+                    "VALUES (%s, %s, %s, %s, %s)",
+                    (nombre.strip(), apellido.strip(), tipo, grado.strip() or None, id_cuenta)
+                )
+                con.commit()
+                con.close()
+                messagebox.showinfo("Éxito", f"{nombre} {apellido} vinculado correctamente.")
+                self.cargar_personas_asociadas(id_cuenta)
+                ventana.destroy()
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo guardar:\n{e}")
+
+    # ============================================================
+    # MÓDULO: GESTIÓN DE PRODUCTOS
+    # ============================================================
     def productos_button_event(self):
         self.limpiar_panel_derecho()
 
-        # Título del módulo
-        titulo = ctk.CTkLabel(
-            self.home_frame, text="Gestión de Menú y Productos", 
+        ctk.CTkLabel(
+            self.home_frame, text="Gestión de Menú y Productos",
             font=ctk.CTkFont(size=24, weight="bold")
+        ).pack(pady=20)
+
+        frame_form = ctk.CTkFrame(self.home_frame)
+        frame_form.pack(pady=5, padx=20, fill="x")
+
+        self.entry_nombre_prod = ctk.CTkEntry(
+            frame_form, placeholder_text="Nombre del Producto", width=200
         )
-        titulo.pack(pady=20)
-
-        # Marco para el formulario (Cajas de texto)
-        frame_formulario = ctk.CTkFrame(self.home_frame)
-        frame_formulario.pack(pady=10, padx=20, fill="x")
-
-        # Cajas de entrada de datos
-        self.entry_nombre_prod = ctk.CTkEntry(frame_formulario, placeholder_text="Nombre del Producto", width=200)
         self.entry_nombre_prod.grid(row=0, column=0, padx=10, pady=10)
 
-        self.menu_categoria = ctk.CTkOptionMenu(frame_formulario, values=["Desayuno", "Bebida", "Chuchería"])
+        self.menu_categoria = ctk.CTkOptionMenu(
+            frame_form, values=["Por Unidad", "Combos", "Bebidas", "Meriendas"]
+        )
         self.menu_categoria.grid(row=0, column=1, padx=10, pady=10)
 
-        self.entry_precio_prod = ctk.CTkEntry(frame_formulario, placeholder_text="Precio (Ej: 1.50)", width=100)
+        self.entry_precio_prod = ctk.CTkEntry(
+            frame_form, placeholder_text="Precio en $ (Ej: 1.50)", width=130
+        )
         self.entry_precio_prod.grid(row=0, column=2, padx=10, pady=10)
 
-        # Botón Guardar (Por ahora solo imprime en consola, luego lo conectaremos a MySQL)
-        btn_guardar_prod = ctk.CTkButton(
-            frame_formulario, text="Guardar Producto", fg_color="green", hover_color="darkgreen",
+        ctk.CTkButton(
+            frame_form, text="💾 Guardar Producto", fg_color="green",
             command=self.guardar_producto_db
+        ).grid(row=0, column=3, padx=10, pady=10)
+
+        # Tabla productos
+        self.tabla_productos = ttk.Treeview(
+            self.home_frame,
+            columns=("ID", "Nombre", "Categoría", "Precio $", "Precio Bs.", "Estado"),
+            show="headings"
         )
-        btn_guardar_prod.grid(row=0, column=3, padx=10, pady=10)
+        for col in ("ID", "Nombre", "Categoría", "Precio $", "Precio Bs.", "Estado"):
+            self.tabla_productos.heading(col, text=col)
+        self.tabla_productos.column("ID",         width=40,  anchor="center")
+        self.tabla_productos.column("Nombre",     width=200)
+        self.tabla_productos.column("Categoría",  width=110, anchor="center")
+        self.tabla_productos.column("Precio $",   width=80,  anchor="center")
+        self.tabla_productos.column("Precio Bs.", width=110, anchor="center")
+        self.tabla_productos.column("Estado",     width=90,  anchor="center")
+        self.tabla_productos.pack(pady=10, padx=20, fill="both", expand=True)
 
-        # Configurar la tabla para mostrar los productos
-        estilo = ttk.Style()
-        estilo.theme_use("default")
-        estilo.configure("Treeview", background="#2a2d2e", foreground="white", rowheight=25, fieldbackground="#343638")
-        estilo.map('Treeview', background=[('selected', '#22559b')])
+        self.cargar_productos()
 
-        self.tabla_productos = ttk.Treeview(self.home_frame, columns=("ID", "Nombre", "Categoría", "Precio"), show="headings")
-        self.tabla_productos.heading("ID", text="ID")
-        self.tabla_productos.heading("Nombre", text="Nombre")
-        self.tabla_productos.heading("Categoría", text="Categoría")
-        self.tabla_productos.heading("Precio", text="Precio ($)")
-        
-        self.tabla_productos.column("ID", width=50, anchor="center")
-        self.tabla_productos.column("Precio", width=100, anchor="center")
-        
-        self.tabla_productos.pack(pady=20, padx=20, fill="both", expand=True)
-        self.cargar_productos() # Carga los datos apenas entras al módulo
-
-    # Función temporal para el botón Guardar
     def guardar_producto_db(self):
-        nombre = self.entry_nombre_prod.get()
-        cat = self.menu_categoria.get()
-        precio = self.entry_precio_prod.get()
+        nombre = self.entry_nombre_prod.get().strip()
+        cat    = self.menu_categoria.get()
+        precio = self.entry_precio_prod.get().strip()
 
         if not nombre or not precio:
-            messagebox.showwarning("Atención", "Todos los campos son obligatorios")
+            messagebox.showwarning("Atención", "Nombre y precio son obligatorios.")
+            return
+        try:
+            precio_val = float(precio)
+        except ValueError:
+            messagebox.showerror("Error", "El precio debe ser un número (Ej: 1.50)")
             return
 
         con = conectar()
         if con:
             try:
                 cursor = con.cursor()
-                sql = "INSERT INTO productos (nombre, categoria, precio) VALUES (%s, %s, %s)"
-                valores = (nombre, cat, precio)
-                cursor.execute(sql, valores)
-                con.commit() # ¡Importante para guardar cambios!
+                cursor.execute(
+                    "INSERT INTO productos (nombre, categoria, precio_usd) VALUES (%s, %s, %s)",
+                    (nombre, cat, precio_val)
+                )
+                con.commit()
                 con.close()
-                
-                messagebox.showinfo("Éxito", f"Producto '{nombre}' guardado correctamente")
-                
-                # Limpiar cajas de texto
-                self.entry_nombre_prod.delete(0, 'end')
-                self.entry_precio_prod.delete(0, 'end')
-                
-                # Refrescar la tabla para ver el cambio
+                messagebox.showinfo("Éxito", f"Producto '{nombre}' guardado.")
+                self.entry_nombre_prod.delete(0, "end")
+                self.entry_precio_prod.delete(0, "end")
                 self.cargar_productos()
-                
             except Exception as e:
-                messagebox.showerror("Error", f"No se pudo guardar: {e}")
-
-    def change_appearance_mode_event(self, new_appearance_mode):
-        ctk.set_appearance_mode(new_appearance_mode)
+                messagebox.showerror("Error", f"No se pudo guardar:\n{e}")
 
     def cargar_productos(self):
-        # Limpiar tabla primero
         for item in self.tabla_productos.get_children():
             self.tabla_productos.delete(item)
-            
         con = conectar()
         if con:
             cursor = con.cursor()
-            cursor.execute("SELECT id_producto, nombre, categoria, precio FROM productos")
+            cursor.execute(
+                "SELECT id_producto, nombre, categoria, precio_usd, estado "
+                "FROM productos ORDER BY categoria, nombre"
+            )
             for fila in cursor.fetchall():
-                self.tabla_productos.insert("", "end", values=fila)
+                precio_usd = float(fila[3])
+                precio_bs  = precio_usd * self.tasa_bcv
+                self.tabla_productos.insert("", "end", values=(
+                    fila[0], fila[1], fila[2],
+                    f"${precio_usd:.2f}",
+                    f"Bs. {precio_bs:,.2f}",
+                    fila[4]
+                ))
             con.close()
 
-    def on_cuenta_select(self, event):
-        """Se activa cada vez que el usuario hace clic en una cuenta de la tabla"""
-        seleccion = self.tabla_cuentas.selection()
-        if seleccion:
-            item = self.tabla_cuentas.item(seleccion[0])
-            id_cuenta = item['values'][0] # Obtenemos el ID de la cuenta
-            self.cargar_estudiantes_asociados(id_cuenta)
-
-    def cargar_estudiantes_asociados(self, id_cuenta):
-        """Busca en MySQL los niños que pertenecen a ese ID de cuenta"""
-        # Limpiar tabla de estudiantes primero
-        for item in self.tabla_estudiantes_asociados.get_children():
-            self.tabla_estudiantes_asociados.delete(item)
-            
-        con = conectar()
-        if con:
-            cursor = con.cursor()
-            query = "SELECT nombre, apellido, grado FROM estudiantes WHERE id_cuenta = %s"
-            cursor.execute(query, (id_cuenta,))
-            
-            for fila in cursor.fetchall():
-                self.tabla_estudiantes_asociados.insert("", "end", values=fila)
-            con.close()
+# ============================================================
+# PUNTO DE ENTRADA
+# ============================================================
 if __name__ == "__main__":
     app = App()
     app.mainloop()
