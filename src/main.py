@@ -11,6 +11,7 @@ from PIL import Image
 import customtkinter as ctk
 from tkinter import messagebox, simpledialog
 from datetime import date, datetime
+from PIL import Image  # Necesario para el procesamiento del logo
 import database as db
 import styles as s
 
@@ -176,7 +177,7 @@ class App(ctk.CTk):
             
         self.views[nombre_vista].grid(row=0, column=0, sticky="nsew")
         self.views[nombre_vista].grid_columnconfigure(0, weight=1)
-        self.views[nombre_vista].grid_rowconfigure(0, weight=1)
+        # Cada módulo configura sus propias filas con los pesos correctos
         return self.views[nombre_vista]
 
     # ── HELPERS DE WIDGETS ───────────────────────────────────
@@ -362,6 +363,7 @@ class App(ctk.CTk):
         if not container.winfo_children():
             container.grid_columnconfigure(0, weight=3)
             container.grid_columnconfigure(1, weight=2)
+            container.grid_rowconfigure(0, weight=1)
             
             # ── IZQUIERDA: CATÁLOGO ──────────────────────────────
             fl = ctk.CTkFrame(container, corner_radius=0, fg_color=s.C_BG)
@@ -406,7 +408,6 @@ class App(ctk.CTk):
             self._e_persona.bind("<KeyRelease>", self._pos_buscar_persona)
 
             self._frame_res_persona = ctk.CTkScrollableFrame(top_r, height=110, fg_color="transparent")
-            self._frame_res_persona.grid_forget()
 
             self._lbl_persona = ctk.CTkLabel(top_r, text="⚠️  Selecciona quién compra",
                                              font=ctk.CTkFont(size=11, weight="bold"), text_color=s.C_ORANGE)
@@ -818,24 +819,25 @@ class App(ctk.CTk):
         
         if not container.winfo_children():
             container.grid_columnconfigure(0, weight=1)
-            container.grid_rowconfigure(1, weight=1)
+            container.grid_rowconfigure(0, weight=0)  # cabecera: tamaño fijo
+            container.grid_rowconfigure(1, weight=1)  # cuerpo: se expande
 
             cab = self._card(container)
-            cab.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 4))
+            cab.grid(row=0, column=0, sticky="ew", padx=10, pady=(4, 4))
             cab.grid_columnconfigure(1, weight=1)
 
-            ctk.CTkLabel(cab, text="📋  Historial de Pedidos", font=s.f_subtitulo(), text_color=s.C_TEXT
-                         ).grid(row=0, column=0, padx=16, pady=14)
+            ctk.CTkLabel(cab, text="📋  Historial", font=s.f_subtitulo(), text_color=s.C_TEXT
+                         ).grid(row=0, column=0, padx=12, pady=8)
 
             self._e_buscar_hist = self._entry(cab, ph="🔍  Buscar por cuenta o persona...")
-            self._e_buscar_hist.grid(row=0, column=1, sticky="ew", padx=10, pady=10)
+            self._e_buscar_hist.grid(row=0, column=1, sticky="ew", padx=8, pady=8)
             self._e_buscar_hist.bind("<KeyRelease>", self._hist_buscar)
 
-            self._btn(cab, "💰  Registrar Abono/Pago", self._hist_abono, color=s.C_BLUE
-                      ).grid(row=0, column=2, padx=10, pady=10)
+            self._btn(cab, "💰  Abono/Pago", self._hist_abono, color=s.C_BLUE
+                      ).grid(row=0, column=2, padx=8, pady=8)
 
             cuerpo = ctk.CTkFrame(container, corner_radius=0, fg_color=s.C_BG)
-            cuerpo.grid(row=1, column=0, sticky="nsew", padx=14, pady=(4, 12))
+            cuerpo.grid(row=1, column=0, sticky="nsew", padx=10, pady=(2, 6))
             cuerpo.grid_columnconfigure(0, weight=2)
             cuerpo.grid_columnconfigure(1, weight=1)
             cuerpo.grid_rowconfigure(0, weight=1)
@@ -1034,29 +1036,35 @@ class App(ctk.CTk):
         
         if not container.winfo_children():
             container.grid_columnconfigure(0, weight=1)
-            container.grid_rowconfigure(1, weight=1)
+            container.grid_rowconfigure(0, weight=0)  # cabecera: tamaño fijo
+            container.grid_rowconfigure(1, weight=1)  # productos: se expande
 
             top = self._card(container)
-            top.grid(row=0, column=0, sticky="ew", padx=14, pady=(12, 6))
+            top.grid(row=0, column=0, sticky="ew", padx=10, pady=(4, 4))
             top.grid_columnconfigure(0, weight=1)
 
             ctk.CTkLabel(top, text="🍔  Gestión de Productos", font=s.f_subtitulo(), text_color=s.C_TEXT
-                         ).grid(row=0, column=0, columnspan=4, pady=(12, 8))
+                         ).grid(row=0, column=0, columnspan=5, pady=(6, 4))
 
             self._e_nom_p = self._entry(top, ph="Nombre del producto")
-            self._e_nom_p.grid(row=1, column=0, sticky="ew", padx=10, pady=8)
+            self._e_nom_p.grid(row=1, column=0, sticky="ew", padx=8, pady=6)
 
             self._m_cat_p = self._opt(top, s.CATEGORIAS)
-            self._m_cat_p.grid(row=1, column=1, padx=8, pady=8)
+            self._m_cat_p.grid(row=1, column=1, padx=6, pady=6)
 
-            self._e_precio_p = self._entry(top, ph="Precio $", width=110)
-            self._e_precio_p.grid(row=1, column=2, padx=8, pady=8)
+            self._e_precio_p = self._entry(top, ph="Precio $", width=100)
+            self._e_precio_p.grid(row=1, column=2, padx=6, pady=6)
 
-            self._btn(top, "🍔  Guardar", self._prod_guardar, color=s.C_GREEN
-                      ).grid(row=1, column=3, padx=10, pady=8)
+            self._btn(top, "💾  Guardar", self._prod_guardar, color=s.C_GREEN
+                      ).grid(row=1, column=3, padx=6, pady=6)
+
+            # Buscador de productos
+            self._e_buscar_prod_gestion = self._entry(top, ph="🔍 Filtrar productos...")
+            self._e_buscar_prod_gestion.grid(row=1, column=4, padx=6, pady=6)
+            self._e_buscar_prod_gestion.bind("<KeyRelease>", lambda e: self._prod_cargar(filtro=self._e_buscar_prod_gestion.get().strip()))
 
             self._frame_prods = ctk.CTkScrollableFrame(container, fg_color="transparent", corner_radius=0)
-            self._frame_prods.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 12))
+            self._frame_prods.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 6))
 
         self._prod_cargar()
 
@@ -1080,7 +1088,11 @@ class App(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Error", str(e))
 
-    def _prod_cargar(self):
+    def _prod_cargar(self, filtro: str = ""):
+        """
+        Reconstruye el grid de productos.
+        Si se pasa filtro, solo muestra los que coincidan con el nombre.
+        """
         for w in self._frame_prods.winfo_children():
             w.destroy()
         try:
@@ -1089,9 +1101,15 @@ class App(ctk.CTk):
             messagebox.showerror("Error", str(e)); return
 
         for cat, prods in categorias.items():
+            if filtro:
+                prods = [p for p in prods if filtro.lower() in p[1].lower()]
+            if not prods:
+                continue
+
             color = s.CAT_COLORS.get(cat, s.C_BLUE)
-            ctk.CTkLabel(self._frame_prods, text=f"  {cat}", font=s.f_bold(), text_color=color, anchor="w"
-                         ).pack(fill="x", padx=6, pady=(14, 4))
+            ctk.CTkLabel(self._frame_prods, text=f"  {cat}",
+                         font=s.f_bold(), text_color=color, anchor="w"
+                         ).pack(fill="x", padx=6, pady=(10, 2))
 
             grid = ctk.CTkFrame(self._frame_prods, fg_color="transparent")
             grid.pack(fill="x", padx=4)
@@ -1101,17 +1119,32 @@ class App(ctk.CTk):
                 p    = float(precio)
                 disp = estado == "Disponible"
                 card = self._card(grid)
-                card.grid(row=i // cols, column=i % cols, padx=5, pady=5, sticky="ew")
+                card.grid(row=i // cols, column=i % cols, padx=4, pady=4, sticky="ew")
                 card.grid_columnconfigure(0, weight=1)
 
-                ctk.CTkLabel(card, text=nom, font=s.f_bold(), text_color=s.C_TEXT if disp else s.C_SUBTEXT, anchor="w"
-                             ).grid(row=0, column=0, padx=10, pady=(8, 2), sticky="w")
-                ctk.CTkLabel(card, text=f"${p:.2f}  ·  Bs.{p * self.tasa_bcv:,.0f}", font=s.f_small(), text_color=color, anchor="w"
-                             ).grid(row=1, column=0, padx=10, pady=(0, 4), sticky="w")
+                ctk.CTkLabel(card, text=nom, font=s.f_bold(),
+                             text_color=s.C_TEXT if disp else s.C_SUBTEXT, anchor="w"
+                             ).grid(row=0, column=0, padx=10, pady=(8, 1), sticky="w")
 
-                self._btn(card, "✅ Disponible" if disp else "❌ Agotado", lambda i=id_p, d=disp: self._prod_toggle(i, d),
-                          color=s.C_ORANGE if disp else "#555", height=s.BTN_HEIGHT_SM
-                          ).grid(row=2, column=0, padx=8, pady=(2, 8), sticky="ew")
+                ctk.CTkLabel(card, text=f"${p:.2f}  ·  Bs.{p * self.tasa_bcv:,.0f}",
+                             font=s.f_small(), text_color=color, anchor="w"
+                             ).grid(row=1, column=0, padx=10, pady=(0, 3), sticky="w")
+
+                btn_row = ctk.CTkFrame(card, fg_color="transparent")
+                btn_row.grid(row=2, column=0, padx=6, pady=(0, 6), sticky="ew")
+                btn_row.grid_columnconfigure(0, weight=1)
+                btn_row.grid_columnconfigure(1, weight=0)
+
+                self._btn(btn_row,
+                          "✅ Disp." if disp else "❌ Agotado",
+                          lambda i=id_p, d=disp: self._prod_toggle(i, d),
+                          color=s.C_ORANGE if disp else "#555", height=26
+                          ).grid(row=0, column=0, sticky="ew", padx=(0, 3))
+
+                self._btn(btn_row, "✏️",
+                          lambda d=(id_p, nom, cat, p, estado): self._prod_editar(d),
+                          color="#444", height=26, width=34
+                          ).grid(row=0, column=1)
 
             for c in range(cols):
                 grid.grid_columnconfigure(c, weight=1)
@@ -1119,9 +1152,52 @@ class App(ctk.CTk):
     def _prod_toggle(self, id_prod: int, disponible: bool):
         try:
             db.toggle_estado_producto(id_prod, disponible)
-            self._prod_cargar()
+            filtro = self._e_buscar_prod_gestion.get().strip() if hasattr(self, "_e_buscar_prod_gestion") else ""
+            self._prod_cargar(filtro=filtro)
         except Exception as e:
             messagebox.showerror("Error", str(e))
+
+    def _prod_editar(self, datos: tuple):
+        """Ventana para editar nombre, categoría, precio y estado de un producto."""
+        id_p, nom, cat, precio, estado = datos
+        v = ctk.CTkToplevel(self)
+        v.title("Editar Producto"); v.geometry("420x360"); v.grab_set()
+
+        ctk.CTkLabel(v, text="Editar Producto",
+                     font=s.f_subtitulo()).pack(pady=(18, 8))
+
+        e_nom = self._entry(v, ph="Nombre del producto")
+        e_nom.insert(0, nom); e_nom.pack(pady=5, padx=24, fill="x")
+
+        m_cat = self._opt(v, s.CATEGORIAS)
+        m_cat.set(cat); m_cat.pack(pady=5, padx=24, fill="x")
+
+        e_precio = self._entry(v, ph="Precio en $")
+        e_precio.insert(0, str(precio)); e_precio.pack(pady=5, padx=24, fill="x")
+
+        m_estado = self._opt(v, ["Disponible", "Agotado"])
+        m_estado.set(estado); m_estado.pack(pady=5, padx=24, fill="x")
+
+        def guardar():
+            nuevo_nom    = e_nom.get().strip()
+            nuevo_cat    = m_cat.get()
+            nuevo_estado = m_estado.get()
+            if not nuevo_nom:
+                messagebox.showwarning("Atención", "El nombre es obligatorio.", parent=v); return
+            try:
+                nuevo_precio = float(e_precio.get().strip())
+            except ValueError:
+                messagebox.showerror("Error", "Precio inválido.", parent=v); return
+            try:
+                db.actualizar_producto(id_p, nuevo_nom, nuevo_cat, nuevo_precio, nuevo_estado)
+                messagebox.showinfo("Producto actualizado.", "Guardado correctamente.", parent=v)
+                filtro = self._e_buscar_prod_gestion.get().strip() if hasattr(self, "_e_buscar_prod_gestion") else ""
+                self._prod_cargar(filtro=filtro)
+                v.destroy()
+            except Exception as e:
+                messagebox.showerror("Error", str(e), parent=v)
+
+        self._btn(v, "Guardar Cambios", guardar, color=s.C_GREEN).pack(pady=14, padx=24, fill="x")
 
 
 # ============================================================

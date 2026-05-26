@@ -577,3 +577,24 @@ def eliminar_transaccion(id_trans: int) -> None:
         if con.is_connected():
             cur.close()
             con.close()
+
+def actualizar_producto(id_producto: int, nombre: str, categoria: str,
+                        precio_usd: float, estado: str) -> None:
+    """Actualiza todos los campos de un producto existente."""
+    con = conectar()
+    if not con:
+        raise ConnectionError("No se pudo conectar.")
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "UPDATE productos SET nombre=%s, categoria=%s, "
+            "precio_usd=%s, estado=%s WHERE id_producto=%s",
+            (nombre, categoria, precio_usd, estado, id_producto)
+        )
+        con.commit()
+    except mysql.connector.Error as e:
+        raise RuntimeError(f"Error al actualizar producto: {e}")
+    finally:
+        if con.is_connected():
+            cur.close()
+            con.close()
