@@ -1,19 +1,21 @@
+import os
 import mysql.connector
+from dotenv import load_dotenv
 from mysql.connector import Error
 
+load_dotenv()  # Carga las variables de entorno desde el archivo .env
+
 def conectar():
-    """Establece la conexión con la base de datos MySQL en XAMPP"""
     try:
         conexion = mysql.connector.connect(
-            host='localhost',
-            user='root',
-            password='',
-            database='cantina_rr'
+            host=os.getenv("DB_HOST"),
+            user=os.getenv("DB_USER"),
+            password=os.getenv("DB_PASSWORD"),
+            database=os.getenv("DB_NAME")
         )
-        if conexion.is_connected():
-            return conexion
-    except Error as e:
-        print(f"❌ Error al conectar a MySQL: {e}")
+        return conexion
+    except mysql.connector.Error as err:
+        print(f"Error de conexión: {err}")
         return None
 
 if __name__ == "__main__":
