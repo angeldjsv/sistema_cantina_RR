@@ -11,7 +11,6 @@ from PIL import Image
 import customtkinter as ctk
 from tkinter import messagebox, simpledialog
 from datetime import date, datetime
-from PIL import Image  # Necesario para el procesamiento del logo
 import database as db
 import styles as s
 
@@ -407,6 +406,7 @@ class App(ctk.CTk):
             self._e_persona.bind("<KeyRelease>", self._pos_buscar_persona)
 
             self._frame_res_persona = ctk.CTkScrollableFrame(top_r, height=110, fg_color="transparent")
+            self._frame_res_persona.grid_forget()
 
             self._lbl_persona = ctk.CTkLabel(top_r, text="⚠️  Selecciona quién compra",
                                              font=ctk.CTkFont(size=11, weight="bold"), text_color=s.C_ORANGE)
@@ -582,6 +582,7 @@ class App(ctk.CTk):
         if not container.winfo_children():
             container.grid_columnconfigure(0, weight=1)
             container.grid_columnconfigure(1, weight=1)
+            container.grid_rowconfigure(0, weight=1)
             
             # ── IZQUIERDA: CUENTAS ───────────────────────────────
             fl = ctk.CTkFrame(container, corner_radius=0, fg_color=s.C_BG)
