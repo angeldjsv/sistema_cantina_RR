@@ -1,71 +1,133 @@
 """
 main.py
 =======
-Interfaz gráfica - Sistema de Gestión Cantina R.R.
-NO contiene lógica de base de datos (ver database.py)
-NO contiene estilos (ver styles.py)
+Sistema de Gestión — Cantina Escolar R.R.
+Interfaz gráfica. Esquema v3: pedidos + detalle_pedido + pagos.
+
+Módulos:
+  - Dashboard          (métricas del día)
+  - Clientes           (alta de cuentas + personas)
+  - Registrar Pedido   (el corazón del sistema — botones grandes)
+  - Cuentas por Cobrar  (semáforo de deuda + WhatsApp)
+  - Productos          (catálogo)
 """
 
 import os
+import webbrowser
+import urllib.parse
+from datetime import date, datetime
 from PIL import Image
 import customtkinter as ctk
-from tkinter import messagebox, simpledialog
-from datetime import date, datetime
-from PIL import Image  # Necesario para el procesamiento del logo
+from tkinter import messagebox
 import database as db
 import styles as s
 
 s.aplicar_tema()
+
+METODOS_PAGO_PEDIDO = [
+    "Efectivo $",
+    "Efectivo Bs",
+    "Pago Móvil",
+    "Transferencia",
+    "Crédito",
+]
+
+GRUPOS_GRADO = {
+    "Preescolar/1ro-3ro (7:30)": ["preescolar", "1er", "2do", "3er"],
+    "4to-6to (8:30)": ["4to", "5to", "6to"],
+    "Bachillerato 1-2 (9:30)": ["1er año", "2do año"],
+    "Bachillerato 3-5 (10:10)": ["3er año", "4to año", "5to año"],
+}
+
+
+# ============================================================
+# UTILIDADES
+# ============================================================
+
+
+def hoy_str() -> str:
+    return date.today().strftime("%Y-%m-%d")
+
+
+def fmt_fecha(valor) -> str:
+    if isinstance(valor, datetime):
+        return valor.strftime("%d/%m/%Y %H:%M")
+    return str(valor) if valor else "—"
+
+
+def fmt_fecha_corta(valor) -> str:
+    if isinstance(valor, datetime):
+        return valor.strftime("%d/%m")
+    return str(valor) if valor else "—"
+
+
+def wa_limpiar_telefono(telefono: str) -> str:
+    solo_numeros = "".join(c for c in telefono if c.isdigit())
+    if solo_numeros.startswith("0"):
+        solo_numeros = "58" + solo_numeros[1:]
+    elif not solo_numeros.startswith("58"):
+        solo_numeros = "58" + solo_numeros
+    return solo_numeros
+
+
+def wa_abrir_link(telefono: str, mensaje: str):
+    numero = wa_limpiar_telefono(telefono)
+    texto = urllib.parse.quote(mensaje)
+    url = f"https://wa.me/{numero}?text={texto}"
+    try:
+        webbrowser.open(url)
+    except Exception as e:
+        messagebox.showerror("Error", f"No se pudo abrir WhatsApp:\n{e}")
 
 
 # ============================================================
 # COMPONENTES REUTILIZABLES
 # ============================================================
 
+
 class ProductoGrid(ctk.CTkScrollableFrame):
-    """Grid de botones de productos. Al hacer clic llama on_click(id, nombre, precio)."""
+    """Grid de botones de productos. Al tocar llama on_click(id, nombre, precio)."""
 
     def __init__(self, master, on_click, **kwargs):
         super().__init__(master, **kwargs)
         self._on_click = on_click
-        self._btns     = []
-        self._cols     = 3
+        self._btns = []
+        self._cols = 3
 
     def cargar(self, productos: list, color: str):
-        """Recibe lista de (id, nombre, precio_usd) y dibuja botones."""
         for b in self._btns:
             b.destroy()
         self._btns = []
         for i, (id_p, nombre, precio_usd) in enumerate(productos):
-            precio = float(precio_usd)   # MySQL devuelve Decimal, convertimos
+            precio = float(precio_usd)
             b = ctk.CTkButton(
                 self,
                 text=f"{nombre}\n${precio:.2f}",
-                width=140, height=70,
+                width=140,
+                height=68,
                 font=s.f_bold(),
                 fg_color=color,
                 hover_color=s.hover(color),
                 corner_radius=12,
-                command=lambda p=(id_p, nombre, precio): self._on_click(p)
+                command=lambda p=(id_p, nombre, precio): self._on_click(p),
             )
-            b.grid(row=i // self._cols, column=i % self._cols,
-                   padx=5, pady=5, sticky="ew")
+            b.grid(
+                row=i // self._cols, column=i % self._cols, padx=5, pady=5, sticky="ew"
+            )
             self._btns.append(b)
         for c in range(self._cols):
             self.grid_columnconfigure(c, weight=1)
 
 
 class CarritoItem(ctk.CTkFrame):
-    """Una fila del carrito con controles + / - / eliminar."""
+    """Fila del carrito con controles + / - / eliminar."""
 
-    def __init__(self, master, producto: dict, tasa: float,
-                 on_change, on_delete, **kwargs):
-        super().__init__(master, corner_radius=10,
-                         fg_color=s.C_CARD, **kwargs)
-        self._p         = producto
-        self._tasa      = tasa
-        self._on_change = on_change
-        self._on_delete = on_delete
+    def __init__(
+        self, master, producto: dict, tasa: float, on_change, on_delete, **kwargs
+    ):
+        super().__init__(master, corner_radius=10, fg_color=s.C_CARD, **kwargs)
+        self._p, self._tasa = producto, tasa
+        self._on_change, self._on_delete = on_change, on_delete
         self._render()
 
     def _render(self):
@@ -73,389 +135,938 @@ class CarritoItem(ctk.CTkFrame):
             w.destroy()
         self.grid_columnconfigure(0, weight=1)
         p = self._p
-
-        # Nombre del producto
-        ctk.CTkLabel(self, text=p["nombre"],
-                     font=s.f_bold(), text_color=s.C_TEXT, anchor="w"
-                     ).grid(row=0, column=0, padx=10, pady=(8, 1), sticky="w")
-
-        # Subtotal en $ y Bs.
+        ctk.CTkLabel(
+            self, text=p["nombre"], font=s.f_bold(), text_color=s.C_TEXT, anchor="w"
+        ).grid(row=0, column=0, padx=10, pady=(8, 1), sticky="w")
         ctk.CTkLabel(
             self,
-            text=f"${p['subtotal']:.2f}  ·  Bs.{p['subtotal'] * self._tasa:,.0f}",
-            font=s.f_small(), text_color=s.C_GREEN
+            text=f"${p['subtotal']:.2f}  ·  Bs.{p['subtotal']*self._tasa:,.0f}",
+            font=s.f_small(),
+            text_color=s.C_GREEN,
         ).grid(row=1, column=0, padx=10, pady=(0, 6), sticky="w")
 
-        # Controles cantidad
         ctrl = ctk.CTkFrame(self, fg_color="transparent")
         ctrl.grid(row=0, column=1, rowspan=2, padx=8, pady=4, sticky="e")
-
-        ctk.CTkButton(
-            ctrl, text="−", width=30, height=30,
-            font=ctk.CTkFont(size=16, weight="bold"),
-            fg_color=s.C_ORANGE, hover_color=s.hover(s.C_ORANGE),
-            corner_radius=8,
-            command=lambda: self._on_change(self._p, -1)
-        ).pack(side="left", padx=2)
-
+        for txt, color, delta in [("−", s.C_ORANGE, -1), ("+", s.C_GREEN, +1)]:
+            ctk.CTkButton(
+                ctrl,
+                text=txt,
+                width=30,
+                height=30,
+                font=ctk.CTkFont(size=16, weight="bold"),
+                fg_color=color,
+                hover_color=s.hover(color),
+                corner_radius=8,
+                command=lambda d=delta: self._on_change(self._p, d),
+            ).pack(side="left", padx=2)
         ctk.CTkLabel(
-            ctrl, text=str(p["cantidad"]),
+            ctrl,
+            text=str(p["cantidad"]),
             font=ctk.CTkFont(size=15, weight="bold"),
-            width=28, text_color=s.C_TEXT
+            width=28,
+            text_color=s.C_TEXT,
         ).pack(side="left", padx=3)
-
         ctk.CTkButton(
-            ctrl, text="+", width=30, height=30,
-            font=ctk.CTkFont(size=16, weight="bold"),
-            fg_color=s.C_GREEN, hover_color=s.hover(s.C_GREEN),
-            corner_radius=8,
-            command=lambda: self._on_change(self._p, +1)
-        ).pack(side="left", padx=2)
-
-        ctk.CTkButton(
-            ctrl, text="🗑", width=30, height=30,
+            ctrl,
+            text="🗑",
+            width=30,
+            height=30,
             font=ctk.CTkFont(size=13),
-            fg_color=s.C_ACCENT, hover_color=s.hover(s.C_ACCENT),
+            fg_color=s.C_ACCENT,
+            hover_color=s.hover(s.C_ACCENT),
             corner_radius=8,
-            command=lambda: self._on_delete(self._p)
+            command=lambda: self._on_delete(self._p),
         ).pack(side="left", padx=(6, 2))
-
-
-# ============================================================
-# UTILIDADES
-# ============================================================
-
-def fmt_fecha(valor) -> str:
-    """Convierte datetime o string a DD/MM/YYYY HH:MM legible."""
-    if isinstance(valor, datetime):
-        return valor.strftime("%d/%m/%Y %H:%M")
-    return str(valor) if valor else "—"
 
 
 # ============================================================
 # APLICACIÓN PRINCIPAL
 # ============================================================
 
+
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Sistema de Gestión — Cantina R.R.")
-        self.geometry("1200x720")
+        self.geometry("1220x740")
         self.configure(fg_color=s.C_BG)
 
-        # Estado global
-        self.tasa_bcv:             float = 1.0
-        self.tasa_fecha:           str   = "—"
-        self.carrito:              list  = []
-        self.persona_seleccionada: dict  = None
-        self.tab_activa:           str   = "Por Unidad"
-        self._cuenta_sel_id:       int   = None
+        self.tasa_bcv: float = 1.0
+        self.tasa_fecha: str = "—"
+        self.carrito: list = []
+        self.persona_sel: dict = None
+        self.tab_activa: str = "Por Unidad"
+        self.views = {}
 
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        # Registro y persistencia de pantallas en caché (Evita lentitud y parpadeos)
         self.home = ctk.CTkFrame(self, corner_radius=0, fg_color=s.C_BG)
         self.home.grid(row=0, column=1, sticky="nsew")
         self.home.grid_columnconfigure(0, weight=1)
         self.home.grid_rowconfigure(0, weight=1)
 
-        self.views = {}
-
         self._build_nav()
-        self._build_inicial_home()
         self._inicializar_tasa()
-
-    def _mostrar_vista(self, nombre_vista: str):
-        """Oculta las vistas existentes y despliega el frame seleccionado sin destruirlo."""
-        for v in self.views.values():
-            if v:
-                v.grid_forget()
-        
-        if self.views.get(nombre_vista) is None:
-            self.views[nombre_vista] = ctk.CTkFrame(self.home, corner_radius=0, fg_color="transparent")
-            
-        self.views[nombre_vista].grid(row=0, column=0, sticky="nsew")
-        self.views[nombre_vista].grid_columnconfigure(0, weight=1)
-        # Cada módulo configura sus propias filas con los pesos correctos
-        return self.views[nombre_vista]
+        self.abrir_dashboard()
 
     # ── HELPERS DE WIDGETS ───────────────────────────────────
-
     def _card(self, parent, **kw):
-        return ctk.CTkFrame(parent, corner_radius=s.CORNER_CARD,
-                            fg_color=s.C_CARD, **kw)
+        return ctk.CTkFrame(
+            parent, corner_radius=s.CORNER_CARD, fg_color=s.C_CARD, **kw
+        )
 
     def _btn(self, parent, texto, cmd, color=None, height=None, **kw):
-        color  = color  or s.C_BLUE
+        color = color or s.C_BLUE
         height = height or s.BTN_HEIGHT
         return ctk.CTkButton(
-            parent, text=texto,
-            fg_color=color, hover_color=s.hover(color),
-            font=s.f_bold(), height=height,
+            parent,
+            text=texto,
+            fg_color=color,
+            hover_color=s.hover(color),
+            font=s.f_bold(),
+            height=height,
             corner_radius=s.CORNER,
-            command=cmd, **kw)
+            command=cmd,
+            **kw,
+        )
 
     def _entry(self, parent, ph="", **kw):
         return ctk.CTkEntry(
-            parent, placeholder_text=ph,
-            font=s.f_normal(), height=s.BTN_HEIGHT,
-            corner_radius=s.CORNER, **kw)
+            parent,
+            placeholder_text=ph,
+            font=s.f_normal(),
+            height=s.BTN_HEIGHT,
+            corner_radius=s.CORNER,
+            **kw,
+        )
 
     def _opt(self, parent, values, **kw):
         return ctk.CTkOptionMenu(
-            parent, values=values,
-            font=s.f_normal(), height=s.BTN_HEIGHT,
-            corner_radius=s.CORNER, **kw)
+            parent,
+            values=values,
+            font=s.f_normal(),
+            height=s.BTN_HEIGHT,
+            corner_radius=s.CORNER,
+            **kw,
+        )
+
+    def _mostrar_vista(self, nombre: str):
+        """Sistema de vistas en caché — evita reconstruir todo cada vez."""
+        for v in self.views.values():
+            v.grid_remove()
+        if nombre not in self.views:
+            frame = ctk.CTkFrame(self.home, corner_radius=0, fg_color=s.C_BG)
+            frame.grid(row=0, column=0, sticky="nsew")
+            frame.grid_columnconfigure(0, weight=1)
+            self.views[nombre] = frame
+        self.views[nombre].grid()
+        return self.views[nombre]
 
     # ── TASA BCV ─────────────────────────────────────────────
-
     def _inicializar_tasa(self):
         try:
-            resultado = db.obtener_tasa_bcv_online()
-            db.guardar_tasa_bcv(resultado["tasa"], date.today().strftime("%Y-%m-%d"))
-            self.tasa_bcv   = resultado["tasa"]
-            self.tasa_fecha = resultado["fecha"]
-            self._actualizar_label_tasa()
+            r = db.obtener_tasa_bcv_online()
+            db.guardar_tasa_bcv(r["tasa"], hoy_str())
+            self.tasa_bcv, self.tasa_fecha = r["tasa"], r["fecha"]
         except Exception:
-            self._cargar_tasa_desde_bd(silencioso=True)
-
-    def _cargar_tasa_desde_bd(self, silencioso=False):
-        try:
-            resultado       = db.obtener_tasa_bcv()
-            self.tasa_bcv   = resultado["tasa"]
-            self.tasa_fecha = resultado["fecha"]
-            self._actualizar_label_tasa()
-            if not silencioso:
-                messagebox.showinfo(
-                    "Tasa cargada desde BD",
-                    f"No hay internet. Se usó la tasa guardada:\n"
-                    f"Bs. {self.tasa_bcv:,.2f}  —  {self.tasa_fecha}")
-        except Exception as e:
-            messagebox.showwarning(
-                "Sin tasa BCV",
-                f"No se pudo cargar la tasa BCV.\nIngresa la tasa manualmente.\n\nDetalle: {e}")
-
-    def _actualizar_tasa_manual(self):
-        val = simpledialog.askstring(
-            "Tasa BCV Manual",
-            f"Ingresa la tasa BCV de hoy ({date.today().strftime('%d/%m/%Y')}):",
-            parent=self)
-        if not val:
-            return
-        try:
-            tasa = float(val.replace(",", "."))
-            if tasa <= 0:
-                raise ValueError
-            db.guardar_tasa_bcv(tasa, date.today().strftime("%Y-%m-%d"))
-            self.tasa_bcv   = tasa
-            self.tasa_fecha = date.today().strftime("%d/%m/%Y")
-            self._actualizar_label_tasa()
-            self._pos_refrescar_carrito()
-            messagebox.showinfo("✅", f"Tasa actualizada: Bs. {tasa:,.2f}")
-        except ValueError:
-            messagebox.showerror("Error", "Ingresa un número válido.")
-
-    def _actualizar_tasa_online(self):
-        try:
-            resultado = db.obtener_tasa_bcv_online()
-            db.guardar_tasa_bcv(resultado["tasa"], date.today().strftime("%Y-%m-%d"))
-            self.tasa_bcv   = resultado["tasa"]
-            self.tasa_fecha = resultado["fecha"]
-            self._actualizar_label_tasa()
-            self._pos_refrescar_carrito()
-            messagebox.showinfo(
-                "✅ Tasa actualizada",
-                f"Tasa BCV: Bs. {self.tasa_bcv:,.2f}\nFecha: {self.tasa_fecha}")
-        except Exception as e:
-            messagebox.showwarning(
-                "Sin conexión",
-                f"No se pudo obtener la tasa online.\n\n{e}\n\nPuedes ingresarla manualmente.")
+            try:
+                r = db.obtener_tasa_bcv()
+                self.tasa_bcv, self.tasa_fecha = r["tasa"], r["fecha"]
+            except Exception as e:
+                messagebox.showwarning(
+                    "Sin tasa BCV", f"No se pudo cargar la tasa.\n\n{e}"
+                )
+        self._actualizar_label_tasa()
 
     def _actualizar_label_tasa(self):
         if hasattr(self, "_lbl_tasa"):
-            self._lbl_tasa.configure(text=f"Bs. {self.tasa_bcv:,.2f}\n{self.tasa_fecha}")
+            self._lbl_tasa.configure(
+                text=f"Bs. {self.tasa_bcv:,.2f}\n{self.tasa_fecha}"
+            )
+
+    def _tasa_actualizar_online(self):
+        try:
+            r = db.obtener_tasa_bcv_online()
+            db.guardar_tasa_bcv(r["tasa"], hoy_str())
+            self.tasa_bcv, self.tasa_fecha = r["tasa"], r["fecha"]
+            self._actualizar_label_tasa()
+            messagebox.showinfo("✅", f"Tasa actualizada: Bs. {self.tasa_bcv:,.2f}")
+        except Exception as e:
+            messagebox.showwarning("Sin conexión", str(e))
+
+    def _tasa_manual(self):
+        v = ctk.CTkToplevel(self)
+        v.title("Tasa Manual")
+        v.geometry("360x220")
+        v.grab_set()
+        ctk.CTkLabel(v, text="Ingresar Tasa BCV Manual", font=s.f_subtitulo()).pack(
+            pady=(20, 10)
+        )
+        e = self._entry(v, ph="Ej: 517.96")
+        e.pack(pady=6, padx=24, fill="x")
+
+        def guardar():
+            try:
+                tasa = float(e.get().strip().replace(",", "."))
+                if tasa <= 0:
+                    raise ValueError
+                db.guardar_tasa_bcv(tasa, hoy_str())
+                self.tasa_bcv = tasa
+                self.tasa_fecha = date.today().strftime("%d/%m/%Y")
+                self._actualizar_label_tasa()
+                messagebox.showinfo("✅", f"Tasa: Bs. {tasa:,.2f}")
+                v.destroy()
+            except ValueError:
+                messagebox.showerror("Error", "Ingresa un número válido.", parent=v)
+
+        self._btn(v, "💾  Guardar", guardar, color=s.C_GREEN).pack(
+            pady=16, padx=24, fill="x"
+        )
 
     # ── NAVEGACIÓN ───────────────────────────────────────────
-
     def _build_nav(self):
-        nav = ctk.CTkFrame(self, corner_radius=0, fg_color=s.C_NAV, width=220)
+        nav = ctk.CTkFrame(self, corner_radius=0, fg_color=s.C_NAV, width=210)
         nav.grid(row=0, column=0, sticky="nsew")
         nav.grid_propagate(False)
-        nav.grid_rowconfigure(8, weight=1)
+        nav.grid_rowconfigure(9, weight=1)
 
-        # Diseño del logo institucional adaptativo con ruta absoluta
-        try:
-            directorio_actual = os.path.dirname(os.path.abspath(__file__))
-            ruta_logo = os.path.join(directorio_actual, "assets", "logo.png") # Cambia a "assets", "logo.png" si creas la carpeta
-            
-            logo_img = ctk.CTkImage(Image.open(ruta_logo), size=(80, 80))
-            ctk.CTkLabel(nav, image=logo_img, text="").grid(row=0, column=0, pady=(24, 4))
-        except Exception:
-            ctk.CTkLabel(nav, text="🍽️", font=ctk.CTkFont(size=34)).grid(row=0, column=0, pady=(24, 2))
+        # --- NUEVO: Carga de logo con ruta segura ---
+        ruta_logo = os.path.join(os.path.dirname(__file__), "assets", "logo.png")
 
-        ctk.CTkLabel(nav, text="CANTINA R.R.",
-                     font=ctk.CTkFont(size=15, weight="bold"),
-                     text_color="white"
-                     ).grid(row=1, column=0, pady=(0, 12))
+        # Puedes ajustar el valor (80, 80) si necesitas el logo más grande o pequeño
+        img_logo = ctk.CTkImage(
+            light_image=Image.open(ruta_logo),
+            dark_image=Image.open(ruta_logo),
+            size=(80, 80),
+        )
 
-        # Panel visual unificado para la visualización del dólar oficial
+        ctk.CTkLabel(nav, image=img_logo, text="").grid(row=0, column=0, pady=(22, 2))
+        # ---------------------------------------------
+
+        ctk.CTkLabel(
+            nav,
+            text="CANTINA R.R.",
+            font=ctk.CTkFont(size=15, weight="bold"),
+            text_color="white",
+        ).grid(row=1, column=0, pady=(0, 8))
+
         bcv_panel = ctk.CTkFrame(nav, corner_radius=10, fg_color="#1e2547")
-        bcv_panel.grid(row=2, column=0, padx=14, pady=(0, 16), sticky="ew")
-
+        bcv_panel.grid(row=2, column=0, padx=14, pady=(0, 10), sticky="ew")
         self._lbl_tasa = ctk.CTkLabel(
-            bcv_panel, text="Cargando tasa...",
-            font=ctk.CTkFont(size=12, weight="bold"), text_color=s.C_GREEN)
+            bcv_panel,
+            text="Cargando...",
+            font=ctk.CTkFont(size=11),
+            text_color=s.C_GREEN,
+        )
         self._lbl_tasa.pack(pady=(8, 4))
-
+        btn_row = ctk.CTkFrame(bcv_panel, fg_color="transparent")
+        btn_row.pack(pady=(0, 8))
+        
+        img_refresh = self._cargar_icono("recarga.png", size=(16, 16))
+        img_edit = self._cargar_icono("lapiz.png", size=(16, 16))
+        
         ctk.CTkButton(
-            bcv_panel, text="🔄 Actualizar Tasa", height=28, font=ctk.CTkFont(size=11),
-            fg_color="#2d3561", hover_color="#3d4a8a", command=self._actualizar_tasa_online
-        ).pack(fill="x", padx=10, pady=(0, 6))
-
+            btn_row,
+            text="",
+            image=img_refresh,
+            width=34,
+            height=26,
+            fg_color="#2d3561",
+            hover_color="#3d4a8a",
+            corner_radius=8,
+            command=self._tasa_actualizar_online,
+        ).pack(side="left", padx=3)
         ctk.CTkButton(
-            bcv_panel, text="✏️ Tasa Manual", height=28, font=ctk.CTkFont(size=11),
-            fg_color="#2d3561", hover_color="#3d4a8a", command=self._actualizar_tasa_manual
-        ).pack(fill="x", padx=10, pady=(0, 10))
+            btn_row,
+            text="",
+            image=img_edit,
+            width=34,
+            height=26,
+            fg_color="#2d3561",
+            hover_color="#3d4a8a",
+            corner_radius=8,
+            command=self._tasa_manual,
+        ).pack(side="left", padx=3)
 
-        # Modulos de cambio de pantalla principal
-        for icono, texto, cmd, fila in [
-            ("🛒", "Punto de Venta",     self.abrir_pos,       4),
-            ("👥", "Cuentas",           self.abrir_cuentas,   5),
-            ("📋", "Historial",         self.abrir_historial, 6),
-            ("🍔", "Productos",         self.abrir_productos, 7),
-        ]:
+        items = [
+            ("dashboard.png", "Dashboard", self.abrir_dashboard, 3),
+            ("apreton.png", "Clientes", self.abrir_clientes, 4),
+            ("recipe.png", "Registrar Pedido", self.abrir_pedidos, 5),
+            ("tarjeta.png", "Cuentas por Cobrar", self.abrir_cobrar, 6),
+            ("hamburguesa.png", "Productos", self.abrir_productos, 7),
+        ]
+        for archivo_icono, texto, cmd, fila in items:
             f = ctk.CTkFrame(nav, fg_color="transparent", cursor="hand2")
             f.grid(row=fila, column=0, sticky="ew", padx=10, pady=3)
             f.grid_columnconfigure(1, weight=1)
-            ctk.CTkLabel(f, text=icono, font=ctk.CTkFont(size=18), width=36
-                         ).grid(row=0, column=0, padx=(10, 4))
+            
+            # Helper para cargar imagen al menu
+            icono_img = self._cargar_icono(archivo_icono, size=(22, 22))
+            
+            # label para la imagen sin texto
+            ctk.CTkLabel(f, text="", image=icono_img, width=32
+                        ).grid(row=0, column=0, padx=(10, 4))
+            
+            # label para el texto del menu
             ctk.CTkLabel(f, text=texto, font=s.f_nav(), text_color="white", anchor="w"
-                         ).grid(row=0, column=1, sticky="ew")
+                        ).grid(row=0, column=1, sticky="ew")
+            
+            # eventos de hover y click se mantiene igual
             for w in [f] + list(f.winfo_children()):
                 w.bind("<Button-1>", lambda e, c=cmd: c())
-                w.bind("<Enter>",    lambda e, fr=f: fr.configure(fg_color=("#2d3561","#2d3561")))
-                w.bind("<Leave>",    lambda e, fr=f: fr.configure(fg_color="transparent"))
+                w.bind("<Enter>",lambda e, fr=f: fr.configure(fg_color=("#2d3561", "#2d3561")),)
+                w.bind("<Leave>", lambda e, fr=f: fr.configure(fg_color="transparent"))
 
-        self._opt(nav, ["Dark", "Light", "System"],
-                  fg_color="#2d3561", button_color="#3d4a8a",
-                  command=lambda m: ctk.set_appearance_mode(m)
-                  ).grid(row=9, column=0, padx=16, pady=20, sticky="ew")
+        self._opt(
+            nav,
+            ["Dark", "Light", "System"],
+            fg_color="#2d3561",
+            button_color="#3d4a8a",
+            command=lambda m: ctk.set_appearance_mode(m),
+        ).grid(row=10, column=0, padx=16, pady=16, sticky="ew")
 
-    def _build_inicial_home(self):
-        container = self._mostrar_vista("home")
-        welcome_frame = ctk.CTkFrame(container, fg_color="transparent")
-        welcome_frame.pack(expand=True)
-        ctk.CTkLabel(welcome_frame, text="Bienvenido 👋",
-                     font=ctk.CTkFont(size=32, weight="bold"),
-                     text_color=s.C_TEXT).pack(pady=(0, 10))
-        ctk.CTkLabel(welcome_frame, text="Sistema de Gestión — Cantina Escolar R.R.",
-                     font=s.f_normal(), text_color=s.C_SUBTEXT).pack()
+    def _cargar_icono(self, nombre_archivo, size=(20, 20)):
+        """Carga una imagen desde la carpeta assets y la convierte en CTkImage"""
+        ruta = os.path.join(os.path.dirname(__file__), "assets", nombre_archivo)
+        return ctk.CTkImage(
+            light_image=Image.open(ruta), dark_image=Image.open(ruta), size=size
+        )
 
     # ============================================================
-    # MÓDULO: PUNTO DE VENTA
+    # MÓDULO: DASHBOARD
     # ============================================================
 
-    def abrir_pos(self):
-        container = self._mostrar_vista("pos")
+    def abrir_dashboard(self):
+        container = self._mostrar_vista("dashboard")
+        self._dash_refrescar(container)
+
+    def _dash_refrescar(self, container):
+        for w in container.winfo_children():
+            w.destroy()
+        container.grid_rowconfigure(0, weight=0)
+        container.grid_rowconfigure(1, weight=1)
+
+        try:
+            m = db.obtener_metricas_dia(hoy_str())
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+            m = {
+                "total_pedidos": 0,
+                "ventas_usd": 0,
+                "pedidos_pagados": 0,
+                "pedidos_pendientes": 0,
+                "cobrado_usd": 0,
+                "deuda_total_usd": 0,
+            }
+
+        # Cabecera
+        cab = self._card(container)
+        cab.grid(row=0, column=0, sticky="ew", padx=14, pady=(10, 6))
         
-        # Re-inicialización estructural limpia si no existe el contenedor interno
+        dia_semana = {
+            "Monday": "Lunes",
+            "Tuesday": "Martes",
+            "Wednesday": "Miércoles",
+            "Thursday": "Jueves",
+            "Friday": "Viernes",
+            "Saturday": "Sábado",
+            "Sunday": "Domingo",
+        }.get(date.today().strftime("%A"), "")
+        
+        # icono de cabecera
+        img_dash = self._cargar_icono("dashboard.png", size=(24, 24))
+        
+        ctk.CTkLabel(
+            cab,
+            text=f"  Buenos días — Hoy es {dia_semana}",
+            image=img_dash,
+            compound="left",
+            font=s.f_subtitulo(),
+            text_color=s.C_TEXT,
+        ).pack(pady=14, padx=16, anchor="w")
+
+        # Grid de métricas
+        grid = ctk.CTkScrollableFrame(container, fg_color="transparent")
+        grid.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 10))
+        for c in range(4):
+            grid.grid_columnconfigure(c, weight=1)
+
+        # Remplazo nombres por archivos
+
+        tarjetas = [
+            ("recipe.png", "Pedidos hoy", str(m["total_pedidos"]), s.C_BLUE),
+            ("check.png", "Pagados", str(m["pedidos_pagados"]), s.C_GREEN),
+            ("relojarena.png", "Pendientes", str(m["pedidos_pendientes"]), s.C_ORANGE),
+            ("dinero.png", "Ventas del día", f"${m['ventas_usd']:.2f}", s.C_YELLOW),
+            ("bolsa_dinero.png", "Cobrado hoy", f"${m['cobrado_usd']:.2f}", s.C_GREEN),
+            ("deuda.png", "Deuda acumulada", f"${m['deuda_total_usd']:.2f}", s.C_ACCENT),
+        ]
+        
+        for i, (archivo_icono, titulo, valor, color) in enumerate(tarjetas):
+            card = self._card(grid)
+            card.grid(row=i // 3, column=i % 3, padx=8, pady=8, sticky="nsew")
+            
+            # carga de imagen
+            img_tarjeta = self._cargar_icono(archivo_icono, size=(32, 32))
+            
+            # ponemos el texto=""
+            ctk.CTkLabel(card, text="", image=img_tarjeta).pack(pady=(16, 2))
+            
+            ctk.CTkLabel(
+                card,
+                text=valor,
+                font=ctk.CTkFont(size=24, weight="bold"),
+                text_color=color,
+            ).pack()
+            
+            ctk.CTkLabel(
+                card, text=titulo, font=s.f_small(), text_color=s.C_SUBTEXT
+            ).pack(pady=(2, 16))
+
+        img_trofeo = self._cargar_icono("trofeo.png", size=(20, 20))
+
+        # Productos más vendidos
+        ctk.CTkLabel(
+            grid,
+            text="   Productos más vendidos (histórico)",
+            font=s.f_bold(),
+            text_color=s.C_TEXT,
+            image=img_trofeo,
+            compound="left",
+        ).grid(row=2, column=0, columnspan=4, pady=(14, 6), sticky="w")
+        try:
+            top = db.obtener_productos_mas_vendidos(5)
+        except Exception:
+            top = []
+        if not top:
+            ctk.CTkLabel(
+                grid,
+                text="Aún no hay ventas registradas.",
+                font=s.f_normal(),
+                text_color=s.C_SUBTEXT,
+            ).grid(row=3, column=0, columnspan=4, sticky="w")
+        else:
+            for i, (nombre, cantidad, ingresos) in enumerate(top):
+                fila = self._card(grid)
+                fila.grid(
+                    row=3 + i, column=0, columnspan=4, sticky="ew", padx=4, pady=3
+                )
+                fila.grid_columnconfigure(1, weight=1)
+                ctk.CTkLabel(
+                    fila,
+                    text=f"#{i+1}",
+                    font=s.f_bold(),
+                    text_color=s.C_PURPLE,
+                    width=40,
+                ).grid(row=0, column=0, padx=(12, 4), pady=10)
+                ctk.CTkLabel(
+                    fila, text=nombre, font=s.f_bold(), text_color=s.C_TEXT, anchor="w"
+                ).grid(row=0, column=1, sticky="w", pady=10)
+                ctk.CTkLabel(
+                    fila,
+                    text=f"{int(cantidad)} vendidos  ·  ${float(ingresos):.2f}",
+                    font=s.f_small(),
+                    text_color=s.C_GREEN,
+                ).grid(row=0, column=2, padx=12, pady=10)
+
+    # ============================================================
+    # MÓDULO: CLIENTES (alta de cuentas y personas)
+    # ============================================================
+
+    def abrir_clientes(self):
+        container = self._mostrar_vista("clientes")
+        # Siempre refrescamos la lista al abrir
+        if not container.winfo_children():
+            container.grid_columnconfigure(0, weight=1)
+            container.grid_columnconfigure(1, weight=1)
+            container.grid_rowconfigure(0, weight=1)
+
+            # ── IZQUIERDA: LISTA DE CLIENTES ─────────────────────
+            fl = ctk.CTkFrame(container, corner_radius=0, fg_color=s.C_BG)
+            fl.grid(row=0, column=0, sticky="nsew", padx=(12, 6), pady=12)
+            fl.grid_rowconfigure(1, weight=1)
+            fl.grid_columnconfigure(0, weight=1)
+
+            top = self._card(fl)
+            top.pack(fill="x", pady=(0, 8))
+            
+            img_clientes = self._cargar_icono("clientes.png", size=(18, 18))
+            
+            ctk.CTkLabel(
+                top,
+                text="   Clientes Registrados",
+                font=s.f_subtitulo(),
+                text_color=s.C_TEXT,
+                image=img_clientes,
+                compound="left",
+            ).pack(pady=(12, 4), padx=14, anchor="w")
+            self._e_cli_buscar = self._entry(
+                top, ph="🔍  Buscar por nombre o apellido..."
+            )
+            self._e_cli_buscar.pack(fill="x", padx=14, pady=(0, 12))
+            self._e_cli_buscar.bind("<KeyRelease>", self._cli_buscar)
+
+            self._frame_cli_resultados = ctk.CTkScrollableFrame(
+                fl, fg_color="transparent", corner_radius=0
+            )
+            self._frame_cli_resultados.pack(fill="both", expand=True)
+
+            # ── DERECHA: FORMULARIO NUEVO CLIENTE ────────────────
+            fr = ctk.CTkFrame(container, corner_radius=0, fg_color=s.C_BG)
+            fr.grid(row=0, column=1, sticky="nsew", padx=(6, 12), pady=12)
+
+            form = self._card(fr)
+            form.pack(fill="x")
+            ctk.CTkLabel(
+                form,
+                text="➕  Nuevo Cliente",
+                font=s.f_subtitulo(),
+                text_color=s.C_TEXT,
+            ).pack(pady=(14, 8), padx=16, anchor="w")
+
+            fila_tipo = ctk.CTkFrame(form, fg_color="transparent")
+            fila_tipo.pack(fill="x", padx=16, pady=4)
+            ctk.CTkLabel(fila_tipo, text="Tipo:", font=s.f_normal()).pack(
+                side="left", padx=(0, 8)
+            )
+            self._m_cli_tipo = self._opt(
+                fila_tipo, s.TIPOS_USUARIO, command=self._cli_toggle_campos
+            )
+            self._m_cli_tipo.pack(side="left", fill="x", expand=True)
+
+            self._e_cli_nombre = self._entry(form, ph="Nombre")
+            self._e_cli_nombre.pack(fill="x", padx=16, pady=5)
+
+            self._e_cli_apellido = self._entry(form, ph="Apellido")
+            self._e_cli_apellido.pack(fill="x", padx=16, pady=5)
+
+            self._e_cli_grado = self._entry(form, ph="Grado/Sección  (Ej: 3er grado A)")
+            self._e_cli_grado.pack(fill="x", padx=16, pady=5)
+
+            ctk.CTkLabel(
+                form,
+                text="Datos del representante:",
+                font=s.f_bold(),
+                text_color=s.C_SUBTEXT,
+            ).pack(pady=(8, 2), padx=16, anchor="w")
+
+            self._e_cli_referencia = self._entry(
+                form, ph="Nombre referencia  (Ej: Hermanos Silva)"
+            )
+            self._e_cli_referencia.pack(fill="x", padx=16, pady=5)
+
+            # Teléfono con prefijo automático
+            fila_tel = ctk.CTkFrame(form, fg_color="transparent")
+            fila_tel.pack(fill="x", padx=16, pady=5)
+            fila_tel.grid_columnconfigure(1, weight=1)
+            ctk.CTkLabel(
+                fila_tel,
+                text="58",
+                font=s.f_bold(),
+                fg_color="#030c37",
+                corner_radius=8,
+                width=38,
+                text_color=s.C_GREEN,
+            ).grid(row=0, column=0, padx=(0, 6), ipady=8)
+            self._e_cli_tel = self._entry(fila_tel, ph="4121234567  (sin el 0 inicial)")
+            self._e_cli_tel.grid(row=0, column=1, sticky="ew")
+
+            ctk.CTkLabel(
+                form,
+                text="El prefijo 58 se agrega automáticamente.",
+                font=s.f_small(),
+                text_color=s.C_SUBTEXT,
+            ).pack(padx=16, pady=(0, 4), anchor="w")
+
+            # cargamos el icono de guardar
+            img_guardar = self._cargar_icono("guardar.png", size=(18, 18))
+
+            self._btn(
+                form, "   Guardar Cliente", self._cli_guardar, color=s.C_GREEN, image=img_guardar
+            ).pack(fill="x", padx=16, pady=(8, 16))
+
+            self._cli_toggle_campos(self._m_cli_tipo.get())
+
+        self._cli_cargar_todos()
+
+    def _cli_toggle_campos(self, tipo: str):
+        if tipo == "Estudiante":
+            self._e_cli_grado.configure(
+                placeholder_text="Grado/Sección  (Ej: 3er grado A)"
+            )
+        else:
+            self._e_cli_grado.configure(placeholder_text="Cargo (opcional)")
+
+    def _cli_cargar_todos(self):
+        """Muestra todos los clientes registrados."""
+        for w in self._frame_cli_resultados.winfo_children():
+            w.destroy()
+        try:
+            filas = db.buscar_personas("")
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+            return
+        if not filas:
+            ctk.CTkLabel(
+                self._frame_cli_resultados,
+                text="No hay clientes registrados aún.\nCrea el primero →",
+                font=s.f_normal(),
+                text_color=s.C_SUBTEXT,
+            ).pack(pady=30)
+            return
+        self._cli_renderizar(filas)
+
+    def _cli_buscar(self, event=None):
+        txt = self._e_cli_buscar.get().strip()
+        if len(txt) < 2:
+            self._cli_cargar_todos()
+            return
+        try:
+            filas = db.buscar_personas(txt)
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+            return
+        for w in self._frame_cli_resultados.winfo_children():
+            w.destroy()
+        if not filas:
+            ctk.CTkLabel(
+                self._frame_cli_resultados,
+                text="Sin resultados. Puedes crearlo →",
+                font=s.f_normal(),
+                text_color=s.C_ORANGE,
+            ).pack(pady=20)
+            return
+        self._cli_renderizar(filas)
+
+    def _cli_renderizar(self, filas: list):
+        """Dibuja la lista de clientes con botones de editar y eliminar."""
+        
+        # cargar los iconos de editar y eliminar
+        img_editar = self._cargar_icono("lapiz.png", size=(16, 16))
+        img_eliminar = self._cargar_icono("borrar.png", size=(16, 16))
+        
+        for f in filas:
+            id_p, nom, ape, tipo, grado, id_c, ref, tel = f
+            card = self._card(self._frame_cli_resultados)
+            card.pack(fill="x", padx=4, pady=4)
+            card.grid_columnconfigure(0, weight=1)
+
+            ctk.CTkLabel(
+                card,
+                text=f"{nom} {ape}",
+                font=s.f_bold(),
+                text_color=s.C_TEXT,
+                anchor="w",
+            ).grid(row=0, column=0, padx=12, pady=(8, 1), sticky="w")
+            sub = tipo + (f" · {grado}" if grado else "") + f"  ·  {ref}  ·  📞{tel}"
+            ctk.CTkLabel(
+                card, text=sub, font=s.f_small(), text_color=s.C_SUBTEXT, anchor="w"
+            ).grid(row=1, column=0, padx=12, pady=(0, 6), sticky="w")
+
+            bf = ctk.CTkFrame(card, fg_color="transparent")
+            bf.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 8))
+            self._btn(
+                bf,
+                "   Editar",
+                lambda d=(
+                    id_p,
+                    nom,
+                    ape,
+                    tipo,
+                    grado,
+                    id_c,
+                    ref,
+                    tel,
+                ): self._cli_editar(d),
+                color="#555",
+                height=30,
+                image=img_editar
+            ).pack(side="left", padx=4)
+            self._btn(
+                bf,
+                "   Eliminar",
+                lambda i=id_p, n=f"{nom} {ape}": self._cli_eliminar(i, n),
+                color=s.C_ACCENT,
+                height=30,
+                image=img_eliminar
+            ).pack(side="left", padx=4)
+
+    def _cli_editar(self, datos: tuple):
+        id_p, nom, ape, tipo, grado, id_c, ref, tel = datos
+        v = ctk.CTkToplevel(self)
+        v.title("Editar Cliente")
+        v.geometry("420x460")
+        v.grab_set()
+        ctk.CTkLabel(v, text="✏️  Editar Cliente", font=s.f_subtitulo()).pack(
+            pady=(18, 8)
+        )
+
+        m_tipo = self._opt(v, s.TIPOS_USUARIO)
+        m_tipo.set(tipo)
+        m_tipo.pack(pady=5, padx=24, fill="x")
+        e_nom = self._entry(v, ph="Nombre")
+        e_nom.insert(0, nom)
+        e_nom.pack(pady=5, padx=24, fill="x")
+        e_ape = self._entry(v, ph="Apellido")
+        e_ape.insert(0, ape)
+        e_ape.pack(pady=5, padx=24, fill="x")
+        e_grado = self._entry(v, ph="Grado/Cargo")
+        e_grado.insert(0, grado or "")
+        e_grado.pack(pady=5, padx=24, fill="x")
+
+        ctk.CTkLabel(
+            v, text="Representante:", font=s.f_bold(), text_color=s.C_SUBTEXT
+        ).pack(pady=(8, 2), padx=24, anchor="w")
+        e_ref = self._entry(v, ph="Nombre referencia")
+        e_ref.insert(0, ref)
+        e_ref.pack(pady=5, padx=24, fill="x")
+
+        # Teléfono — mostrar sin el 58 inicial para edición cómoda
+        tel_sin_prefijo = tel[2:] if tel.startswith("58") else tel
+        fila_tel = ctk.CTkFrame(v, fg_color="transparent")
+        fila_tel.pack(fill="x", padx=24, pady=5)
+        fila_tel.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(
+            fila_tel,
+            text="58",
+            font=s.f_bold(),
+            fg_color="#1e2547",
+            corner_radius=8,
+            width=38,
+            text_color=s.C_GREEN,
+        ).grid(row=0, column=0, padx=(0, 6), ipady=8)
+        e_tel = self._entry(fila_tel)
+        e_tel.insert(0, tel_sin_prefijo)
+        e_tel.grid(row=0, column=1, sticky="ew")
+
+        def guardar():
+            nuevo_tel = "58" + e_tel.get().strip().lstrip("0")
+            try:
+                db.actualizar_persona(
+                    id_p,
+                    e_nom.get().strip(),
+                    e_ape.get().strip(),
+                    m_tipo.get(),
+                    e_grado.get().strip(),
+                )
+                db.actualizar_cuenta(id_c, e_ref.get().strip(), nuevo_tel, m_tipo.get())
+                messagebox.showinfo("✅", "Cliente actualizado.", parent=v)
+                self._cli_cargar_todos()
+                v.destroy()
+            except Exception as e:
+                messagebox.showerror("Error", str(e), parent=v)
+
+        self._btn(v, "💾  Guardar", guardar, color=s.C_GREEN).pack(
+            pady=14, padx=24, fill="x"
+        )
+
+    def _cli_eliminar(self, id_persona: int, nombre: str):
+        if not messagebox.askyesno(
+            "Confirmar",
+            f"¿Eliminar a {nombre}?\nSe borrarán también sus pedidos asociados.",
+        ):
+            return
+        try:
+            db.eliminar_persona(id_persona)
+            messagebox.showinfo("✅", f"{nombre} eliminado.")
+            self._cli_cargar_todos()
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+    def _cli_guardar(self):
+        tipo = self._m_cli_tipo.get()
+        nombre = self._e_cli_nombre.get().strip()
+        ape = self._e_cli_apellido.get().strip()
+        grado = self._e_cli_grado.get().strip()
+        ref = self._e_cli_referencia.get().strip()
+        tel_raw = self._e_cli_tel.get().strip()
+
+        if not nombre or not ape or not ref or not tel_raw:
+            messagebox.showwarning(
+                "Atención", "Nombre, apellido, referencia y teléfono son obligatorios."
+            )
+            return
+        # Construir teléfono con prefijo 58
+        tel = "58" + tel_raw.lstrip("0")
+        try:
+            id_cuenta = db.crear_cuenta(ref, tel, tipo)
+            db.crear_persona(nombre, ape, tipo, grado, id_cuenta)
+            messagebox.showinfo(
+                "✅ Cliente creado",
+                f'{nombre} {ape} registrado bajo la cuenta "{ref}".',
+            )
+            self._e_cli_nombre.delete(0, "end")
+            self._e_cli_apellido.delete(0, "end")
+            self._e_cli_grado.delete(0, "end")
+            self._e_cli_referencia.delete(0, "end")
+            self._e_cli_tel.delete(0, "end")
+            self._cli_cargar_todos()
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+    # ============================================================
+    # MÓDULO: REGISTRAR PEDIDO (el corazón del sistema)
+    # ============================================================
+
+    def abrir_pedidos(self):
+        container = self._mostrar_vista("pedidos")
+        self.carrito = []
+        self.persona_sel = None
+
         if not container.winfo_children():
             container.grid_columnconfigure(0, weight=3)
             container.grid_columnconfigure(1, weight=2)
             container.grid_rowconfigure(0, weight=1)
-            
-            # ── IZQUIERDA: CATÁLOGO ──────────────────────────────
+
+            # ── IZQUIERDA: CATÁLOGO ──────────────────────────
             fl = ctk.CTkFrame(container, corner_radius=0, fg_color=s.C_BG)
             fl.grid(row=0, column=0, sticky="nsew", padx=(12, 6), pady=12)
             fl.grid_rowconfigure(2, weight=1)
             fl.grid_columnconfigure(0, weight=1)
 
-            self._e_buscar_prod = self._entry(fl, ph="🔍  Buscar producto...")
-            self._e_buscar_prod.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 8))
-            self._e_buscar_prod.bind("<KeyRelease>", self._pos_filtrar)
+            self._e_buscar_prod_pedido = self._entry(fl, ph="🔍  Buscar producto...")
+            self._e_buscar_prod_pedido.grid(
+                row=0, column=0, sticky="ew", padx=4, pady=(4, 8)
+            )
+            self._e_buscar_prod_pedido.bind("<KeyRelease>", self._ped_filtrar_prod)
 
             tabs = ctk.CTkFrame(fl, fg_color="transparent")
             tabs.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 6))
             self._tab_btns = {}
             for cat in s.CATEGORIAS:
                 b = ctk.CTkButton(
-                    tabs, text=cat, height=34, font=ctk.CTkFont(size=12, weight="bold"),
-                    fg_color=s.CAT_COLORS[cat], hover_color=s.hover(s.CAT_COLORS[cat]),
-                    corner_radius=18, command=lambda c=cat: self._pos_cambiar_tab(c))
+                    tabs,
+                    text=cat,
+                    height=34,
+                    font=ctk.CTkFont(size=12, weight="bold"),
+                    fg_color=s.CAT_COLORS[cat],
+                    hover_color=s.hover(s.CAT_COLORS[cat]),
+                    corner_radius=18,
+                    command=lambda c=cat: self._ped_cambiar_tab(c),
+                )
                 b.pack(side="left", padx=4)
                 self._tab_btns[cat] = b
 
-            self._prod_grid = ProductoGrid(fl, on_click=self._pos_agregar, fg_color="transparent", corner_radius=0)
+            self._prod_grid = ProductoGrid(
+                fl, on_click=self._ped_agregar, fg_color="transparent", corner_radius=0
+            )
             self._prod_grid.grid(row=2, column=0, sticky="nsew", padx=4)
 
-            # ── DERECHA: PERSONA DINÁMICA + CARRITO ────────────
-            fr = ctk.CTkFrame(container, corner_radius=0, fg_color=("#e8e8f0", "#0f0f1a"))
+            # ── DERECHA: CLIENTE + CARRITO ────────────────────
+            fr = ctk.CTkFrame(
+                container, corner_radius=0, fg_color=("#e8e8f0", "#0f0f1a")
+            )
             fr.grid(row=0, column=1, sticky="nsew", padx=(6, 12), pady=12)
             fr.grid_columnconfigure(0, weight=1)
-            fr.grid_rowconfigure(0, weight=0)
-            fr.grid_rowconfigure(2, weight=1)
+            fr.grid_rowconfigure(0, weight=0)  # panel persona: fijo
+            fr.grid_rowconfigure(2, weight=1)  # carrito: se expande
 
+            # ── Panel "¿Quién pide?" — compacto en una sola fila ──
             top_r = self._card(fr)
-            top_r.grid(row=0, column=0, sticky="ew", padx=10, pady=(4, 2))
+            top_r.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 4))
             top_r.grid_columnconfigure(0, weight=1)
+            top_r.grid_columnconfigure(1, weight=0)
 
-            ctk.CTkLabel(top_r, text="¿Quién compra?", font=s.f_bold(), text_color=s.C_TEXT
-                         ).grid(row=0, column=0, pady=(4, 0), padx=12, sticky="w")
+            ctk.CTkLabel(
+                top_r, text="¿Quién pide?", font=s.f_bold(), text_color=s.C_TEXT
+            ).grid(row=0, column=0, columnspan=2, pady=(8, 4), padx=12, sticky="w")
 
-            self._e_persona = self._entry(top_r, ph="🔍  Nombre del cliente...")
-            self._e_persona.grid(row=1, column=0, sticky="ew", padx=10, pady=2)
-            self._e_persona.bind("<KeyRelease>", self._pos_buscar_persona)
+            self._e_persona = self._entry(top_r, ph="🔍  Nombre del alumno...")
+            self._e_persona.grid(row=1, column=0, sticky="ew", padx=(10, 4), pady=4)
+            self._e_persona.bind("<KeyRelease>", self._ped_buscar_persona)
 
-            self._frame_res_persona = ctk.CTkScrollableFrame(top_r, height=110, fg_color="transparent")
+            self._lbl_persona = ctk.CTkLabel(
+                top_r,
+                text="⚠️  Selecciona quién pide",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                text_color=s.C_ORANGE,
+            )
+            self._lbl_persona.grid(row=2, column=0, columnspan=2, pady=(2, 6), padx=12)
 
-            self._lbl_persona = ctk.CTkLabel(top_r, text="⚠️  Selecciona quién compra",
-                                             font=ctk.CTkFont(size=11, weight="bold"), text_color=s.C_ORANGE)
-            self._lbl_persona.grid(row=3, column=0, pady=(2, 4), padx=12)
+            # Resultados de búsqueda — altura reducida
+            self._frame_res_persona = ctk.CTkScrollableFrame(
+                top_r, height=65, fg_color="transparent"
+            )
+            self._frame_res_persona.grid(
+                row=3, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 8)
+            )
 
-            ctk.CTkLabel(fr, text="🛒  Carrito", font=s.f_subtitulo(), text_color=s.C_TEXT
-                         ).grid(row=1, column=0, pady=(6, 2), padx=14, sticky="w")
+            # icono de detalle del pedido
+            img_detalle = self._cargar_icono("pagina.png", size=(20, 20))
 
-            self._frame_carrito = ctk.CTkScrollableFrame(fr, fg_color="transparent", corner_radius=0)
-            self._frame_carrito.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 4))
+            # ── Título carrito ────────────────────────────────────
+            ctk.CTkLabel(
+                fr,
+                text="   Detalle del Pedido",
+                font=s.f_subtitulo(),
+                text_color=s.C_TEXT,
+                image=img_detalle,
+                compound="left",
+            ).grid(row=1, column=0, pady=(4, 2), padx=14, sticky="w")
+
+            # ── Carrito — ocupa todo el espacio disponible ────────
+            self._frame_carrito = ctk.CTkScrollableFrame(
+                fr, fg_color="transparent", corner_radius=0
+            )
+            self._frame_carrito.grid(row=2, column=0, sticky="nsew", padx=10, pady=4)
             self._frame_carrito.grid_columnconfigure(0, weight=1)
 
+            # ── Footer con totales y método de pago ───────────────
             footer = self._card(fr)
             footer.grid(row=3, column=0, sticky="ew", padx=10, pady=(4, 6))
             footer.grid_columnconfigure(0, weight=1)
             footer.grid_columnconfigure(1, weight=1)
 
-            self._lbl_total_usd = ctk.CTkLabel(footer, text="$0.00", font=s.f_total(), text_color=s.C_GREEN)
-            self._lbl_total_usd.grid(row=0, column=0, columnspan=2, pady=(10, 2))
+            self._lbl_total_usd = ctk.CTkLabel(
+                footer, text="$0.00", font=s.f_total(), text_color=s.C_GREEN
+            )
+            self._lbl_total_usd.grid(row=0, column=0, columnspan=2, pady=(8, 1))
 
-            self._lbl_total_bs = ctk.CTkLabel(footer, text="Bs. 0", font=s.f_normal(), text_color=s.C_YELLOW)
-            self._lbl_total_bs.grid(row=1, column=0, columnspan=2, pady=(0, 6))
+            self._lbl_total_bs = ctk.CTkLabel(
+                footer, text="Bs. 0", font=s.f_normal(), text_color=s.C_YELLOW
+            )
+            self._lbl_total_bs.grid(row=1, column=0, columnspan=2, pady=(0, 4))
 
-            self._combo_metodo = self._opt(footer, s.METODOS_PAGO, fg_color=s.C_BLUE, button_color=s.hover(s.C_BLUE))
-            self._combo_metodo.grid(row=2, column=0, columnspan=2, sticky="ew", padx=12, pady=6)
+            self._combo_metodo = self._opt(
+                footer,
+                METODOS_PAGO_PEDIDO,
+                fg_color=s.C_BLUE,
+                button_color=s.hover(s.C_BLUE),
+            )
+            self._combo_metodo.grid(
+                row=2, column=0, columnspan=2, sticky="ew", padx=12, pady=4
+            )
 
-            self._btn(footer, "✅  FINALIZAR VENTA", self._pos_finalizar, color=s.C_GREEN, height=s.BTN_HEIGHT_LG
-                      ).grid(row=3, column=0, columnspan=2, sticky="ew", padx=12, pady=(4, 12))
+            # icono guardar pedido
+            img_guardar = self._cargar_icono("check.png", size=(18, 18))
 
-            self._pos_cambiar_tab("Por Unidad")
-            
-        # Refrescar datos del carrito e interfaz
-        self._pos_refrescar_carrito()
+            self._btn(
+                footer,
+                "   GUARDAR PEDIDO",
+                self._ped_guardar,
+                color=s.C_GREEN,
+                height=s.BTN_HEIGHT_LG,
+                image=img_guardar,
+                compound="left",
+            ).grid(row=3, column=0, columnspan=2, sticky="ew", padx=12, pady=(4, 10))
 
-    def _pos_cambiar_tab(self, cat: str):
+        self._ped_cambiar_tab(self.tab_activa)
+
+    def _ped_cambiar_tab(self, cat: str):
         self.tab_activa = cat
         for c, b in self._tab_btns.items():
             b.configure(fg_color=s.CAT_COLORS[c] if c == cat else ("#aaa", "#3a3a5c"))
-        self._pos_cargar_productos(categoria=cat)
+        self._ped_cargar_productos(categoria=cat)
 
-    def _pos_filtrar(self, event=None):
-        txt = self._e_buscar_prod.get().strip()
+    def _ped_filtrar_prod(self, event=None):
+        txt = self._e_buscar_prod_pedido.get().strip()
         if txt:
-            self._pos_cargar_productos(filtro=txt)
+            self._ped_cargar_productos(filtro=txt)
         else:
-            self._pos_cambiar_tab(self.tab_activa)
+            self._ped_cambiar_tab(self.tab_activa)
 
-    def _pos_cargar_productos(self, categoria: str = None, filtro: str = None):
+    def _ped_cargar_productos(self, categoria=None, filtro=None):
         try:
             filas = db.obtener_productos(categoria=categoria, filtro=filtro)
         except Exception as e:
@@ -464,21 +1075,26 @@ class App(ctk.CTk):
         color = s.CAT_COLORS.get(categoria or self.tab_activa, s.C_BLUE)
         self._prod_grid.cargar(filas, color)
 
-    def _pos_agregar(self, prod: tuple):
+    def _ped_agregar(self, prod: tuple):
         id_p, nombre, precio = prod
         for p in self.carrito:
             if p["id"] == id_p:
                 p["cantidad"] += 1
                 p["subtotal"] = round(p["cantidad"] * p["precio"], 2)
-                self._pos_refrescar_carrito()
+                self._ped_refrescar_carrito()
                 return
-        self.carrito.append({
-            "id": id_p, "nombre": nombre,
-            "precio": precio, "cantidad": 1, "subtotal": precio
-        })
-        self._pos_refrescar_carrito()
+        self.carrito.append(
+            {
+                "id": id_p,
+                "nombre": nombre,
+                "precio": precio,
+                "cantidad": 1,
+                "subtotal": precio,
+            }
+        )
+        self._ped_refrescar_carrito()
 
-    def _pos_cambiar_cant(self, prod: dict, delta: int):
+    def _ped_cambiar_cant(self, prod: dict, delta: int):
         for p in self.carrito:
             if p["id"] == prod["id"]:
                 p["cantidad"] = max(0, p["cantidad"] + delta)
@@ -487,545 +1103,514 @@ class App(ctk.CTk):
                 else:
                     p["subtotal"] = round(p["cantidad"] * p["precio"], 2)
                 break
-        self._pos_refrescar_carrito()
+        self._ped_refrescar_carrito()
 
-    def _pos_eliminar(self, prod: dict):
+    def _ped_eliminar(self, prod: dict):
         self.carrito = [p for p in self.carrito if p["id"] != prod["id"]]
-        self._pos_refrescar_carrito()
+        self._ped_refrescar_carrito()
 
-    def _pos_refrescar_carrito(self):
-        if not hasattr(self, "_frame_carrito"):
-            return
+    def _ped_refrescar_carrito(self):
         for w in self._frame_carrito.winfo_children():
             w.destroy()
         total = 0.0
         for p in self.carrito:
             CarritoItem(
-                self._frame_carrito, p, self.tasa_bcv,
-                on_change=self._pos_cambiar_cant,
-                on_delete=self._pos_eliminar
+                self._frame_carrito,
+                p,
+                self.tasa_bcv,
+                on_change=self._ped_cambiar_cant,
+                on_delete=self._ped_eliminar,
             ).pack(fill="x", padx=4, pady=3)
             total += p["subtotal"]
         self._lbl_total_usd.configure(text=f"${total:.2f}")
-        self._lbl_total_bs.configure(text=f"Bs. {total * self.tasa_bcv:,.0f}")
+        self._lbl_total_bs.configure(text=f"Bs. {total*self.tasa_bcv:,.0f}")
 
-    def _pos_buscar_persona(self, event=None):
+    def _ped_buscar_persona(self, event=None):
         for w in self._frame_res_persona.winfo_children():
             w.destroy()
         txt = self._e_persona.get().strip()
         if len(txt) < 2:
-            self._frame_res_persona.grid_forget()
             return
         try:
             filas = db.buscar_personas(txt)
         except Exception as e:
             messagebox.showerror("Error", str(e))
             return
-        if not filas:
-            self._frame_res_persona.grid_forget()
-            return
-
-        self._frame_res_persona.grid(row=2, column=0, sticky="ew", padx=10, pady=3)
         for f in filas:
-            id_p, nom, ape, tipo, id_c, ref = f
+            id_p, nom, ape, tipo, grado, id_c, ref, tel = f
+            sub = tipo + (f" · {grado}" if grado else "")
             ctk.CTkButton(
-                self._frame_res_persona, text=f"  {nom} {ape}  ·  {tipo}  ·  {ref}",
-                anchor="w", height=32, font=s.f_small(),
-                fg_color=("#dde3f0", "#1e2a45"), text_color=s.C_TEXT,
-                hover_color=s.C_BLUE, corner_radius=8,
-                command=lambda d=(id_p, f"{nom} {ape}", id_c, ref): self._pos_sel_persona(d)
+                self._frame_res_persona,
+                text=f"  {nom} {ape}  ·  {sub}  ·  {ref}",
+                anchor="w",
+                height=32,
+                font=s.f_small(),
+                fg_color=("#dde3f0", "#1e2a45"),
+                text_color=s.C_TEXT,
+                hover_color=s.C_BLUE,
+                corner_radius=8,
+                command=lambda d=(
+                    id_p,
+                    f"{nom} {ape}",
+                    id_c,
+                    ref,
+                ): self._ped_sel_persona(d),
             ).pack(fill="x", pady=2, padx=2)
 
-    def _pos_sel_persona(self, data: tuple):
+    def _ped_sel_persona(self, data: tuple):
         id_p, nombre, id_c, ref = data
-        self.persona_seleccionada = {
-            "id_persona": id_p, "nombre": nombre,
-            "id_cuenta": id_c,  "cuenta": ref
+        self.persona_sel = {
+            "id_persona": id_p,
+            "nombre": nombre,
+            "id_cuenta": id_c,
+            "cuenta": ref,
         }
-        self._lbl_persona.configure(text=f"✅  {nombre}  —  {ref}", text_color=s.C_GREEN)
-        self._frame_res_persona.grid_forget()
+        self._lbl_persona.configure(
+            text=f"✅  {nombre}  —  {ref}", text_color=s.C_GREEN
+        )
+        for w in self._frame_res_persona.winfo_children():
+            w.destroy()
         self._e_persona.delete(0, "end")
 
-    def _pos_finalizar(self):
+    def _ped_guardar(self):
         if not self.carrito:
-            messagebox.showwarning("Carrito vacío", "Agrega productos antes de finalizar.")
+            messagebox.showwarning("Pedido vacío", "Agrega productos antes de guardar.")
             return
-        if not self.persona_seleccionada:
-            messagebox.showwarning("Sin persona", "Selecciona quién está comprando.")
+        if not self.persona_sel:
+            messagebox.showwarning("Sin persona", "Selecciona quién hizo el pedido.")
             return
-        metodo   = self._combo_metodo.get()
-        total    = round(sum(p["subtotal"] for p in self.carrito), 2)
-        total_bs = round(total * self.tasa_bcv, 2)
+        metodo = self._combo_metodo.get()
+        total = round(sum(p["subtotal"] for p in self.carrito), 2)
         try:
-            db.registrar_venta(
-                self.persona_seleccionada["id_cuenta"],
-                self.persona_seleccionada["id_persona"],
-                self.carrito, self.tasa_bcv, metodo)
+            db.registrar_pedido(
+                self.persona_sel["id_persona"], self.carrito, self.tasa_bcv, metodo
+            )
+            estado = (
+                "quedó PENDIENTE de pago"
+                if metodo == "Crédito"
+                else f"pagado en {metodo}"
+            )
             messagebox.showinfo(
-                "✅ Venta Registrada",
-                f"Comprador: {self.persona_seleccionada['nombre']}\n"
-                f"Cuenta:    {self.persona_seleccionada['cuenta']}\n\n"
-                f"Total: ${total:.2f}  /  Bs. {total_bs:,.2f}\nMétodo: {metodo}")
+                "✅ Pedido Registrado",
+                f"Alumno: {self.persona_sel['nombre']}\n"
+                f"Cuenta: {self.persona_sel['cuenta']}\n\n"
+                f"Total: ${total:.2f}\n"
+                f"Este pedido {estado}.",
+            )
             self.carrito = []
-            self._pos_refrescar_carrito()
-            self.persona_seleccionada = None
-            self._lbl_persona.configure(text="⚠️  Selecciona quién compra", text_color=s.C_ORANGE)
+            self._ped_refrescar_carrito()
+            self.persona_sel = None
+            self._lbl_persona.configure(
+                text="⚠️  Selecciona quién pide", text_color=s.C_ORANGE
+            )
         except Exception as e:
-            messagebox.showerror("Error al registrar venta", str(e))
+            messagebox.showerror("Error al guardar", str(e))
 
     # ============================================================
-    # MÓDULO: CUENTAS Y PERSONAS
+    # MÓDULO: CUENTAS POR COBRAR
     # ============================================================
 
-    def abrir_cuentas(self):
-        container = self._mostrar_vista("cuentas")
-        
+    def abrir_cobrar(self):
+        container = self._mostrar_vista("cobrar")
         if not container.winfo_children():
             container.grid_columnconfigure(0, weight=1)
             container.grid_columnconfigure(1, weight=1)
             container.grid_rowconfigure(0, weight=1)
-            
-            # ── IZQUIERDA: CUENTAS ───────────────────────────────
+
+            # ── IZQUIERDA: LISTA DE CUENTAS CON DEUDA ────────
             fl = ctk.CTkFrame(container, corner_radius=0, fg_color=s.C_BG)
             fl.grid(row=0, column=0, sticky="nsew", padx=(12, 6), pady=12)
+            fl.grid_rowconfigure(1, weight=1)
             fl.grid_columnconfigure(0, weight=1)
 
-            form = self._card(fl)
-            form.pack(fill="x", padx=4, pady=(4, 8))
-            form.grid_columnconfigure(0, weight=1)
-            form.grid_columnconfigure(1, weight=1)
+            top = self._card(fl)
+            top.pack(fill="x", pady=(0, 8))
+            
+            # icono de cuentas por cobrar y de enviar a todos
+            img_cobrar = self._cargar_icono("tarjeta.png", size=(18, 18))
+            img_cobrar_masivo = self._cargar_icono("enviaratodos.png", size=(18, 18))
+            
+            ctk.CTkLabel(
+                top,
+                text="   Cuentas por Cobrar",
+                font=s.f_subtitulo(),
+                text_color=s.C_TEXT,
+                image=img_cobrar,
+                compound="left"
+            ).pack(pady=(12, 4), padx=14, anchor="w")
+            self._lbl_cobrar_resumen = ctk.CTkLabel(
+                top, text="", font=s.f_small(), text_color=s.C_SUBTEXT
+            )
+            self._lbl_cobrar_resumen.pack(pady=(0, 4), padx=14, anchor="w")
+            self._btn(
+                top,
+                "   Enviar recordatorio a TODOS",
+                self._cobrar_masivo,
+                color=s.C_ORANGE,
+                image=img_cobrar_masivo,
+                compound="left"
+            ).pack(fill="x", padx=14, pady=(4, 12))
 
-            ctk.CTkLabel(form, text="Cuentas Registradas", font=s.f_subtitulo(), text_color=s.C_TEXT
-                         ).grid(row=0, column=0, columnspan=2, pady=(12, 8), padx=14)
+            self._frame_cobrar_lista = ctk.CTkScrollableFrame(
+                fl, fg_color="transparent", corner_radius=0
+            )
+            self._frame_cobrar_lista.pack(fill="both", expand=True)
 
-            self._e_ref = self._entry(form, ph="Nombre  (Ej: Familia Pérez)")
-            self._e_ref.grid(row=1, column=0, columnspan=2, sticky="ew", padx=12, pady=4)
-
-            self._e_tel = self._entry(form, ph="Teléfono")
-            self._e_tel.grid(row=2, column=0, sticky="ew", padx=12, pady=4)
-
-            self._m_tipo = self._opt(form, s.TIPOS_USUARIO)
-            self._m_tipo.grid(row=2, column=1, sticky="ew", padx=12, pady=4)
-
-            self._btn(form, "➕  Crear Cuenta", self._cta_crear, color=s.C_GREEN
-                      ).grid(row=3, column=0, columnspan=2, sticky="ew", padx=12, pady=(6, 12))
-
-            # ── BARRA DE BÚSQUEDA DINÁMICA DE CUENTAS ──
-            self._e_buscar_cta = self._entry(fl, ph="🔍  Buscar cuenta...")
-            self._e_buscar_cta.pack(fill="x", padx=4, pady=(0, 6))
-            self._e_buscar_cta.bind("<KeyRelease>", self._cta_buscar_evento)
-
-            self._frame_cuentas = ctk.CTkScrollableFrame(fl, fg_color="transparent", corner_radius=0)
-            self._frame_cuentas.pack(fill="both", expand=True, padx=4)
-            self._frame_cuentas.grid_columnconfigure(0, weight=1)
-
-            # ── DERECHA: PERSONAS ────────────────────────────────
+            # ── DERECHA: DETALLE DE LA CUENTA SELECCIONADA ───
             fr = ctk.CTkFrame(container, corner_radius=0, fg_color=s.C_BG)
             fr.grid(row=0, column=1, sticky="nsew", padx=(6, 12), pady=12)
+            fr.grid_rowconfigure(1, weight=1)
             fr.grid_columnconfigure(0, weight=1)
 
-            self._lbl_per_titulo = ctk.CTkLabel(fr, text="👥  Selecciona una cuenta", font=s.f_subtitulo(), text_color=s.C_SUBTEXT)
-            self._lbl_per_titulo.pack(pady=(16, 8))
+            # icono de seleccion una cuenta
+            img_seleccionar = self._cargar_icono("tarjeta.png", size=(18, 18))
 
-            self._frame_personas = ctk.CTkScrollableFrame(fr, fg_color="transparent", corner_radius=0)
-            self._frame_personas.pack(fill="both", expand=True, padx=4)
-            self._frame_personas.grid_columnconfigure(0, weight=1)
+            self._lbl_cobrar_titulo = ctk.CTkLabel(
+                fr,
+                text="   Selecciona una cuenta",
+                font=s.f_subtitulo(),
+                text_color=s.C_SUBTEXT,
+                image=img_seleccionar,
+                compound="left"
+            )
+            self._lbl_cobrar_titulo.pack(pady=(16, 8))
 
-            self._btn_vincular = self._btn(fr, "➕  Vincular Persona", self._per_abrir_form, color=s.C_BLUE)
-            self._btn_vincular.pack(fill="x", padx=14, pady=(6, 4))
-            self._btn_vincular.configure(state="disabled")
+            self._frame_cobrar_detalle = ctk.CTkScrollableFrame(
+                fr, fg_color="transparent", corner_radius=0
+            )
+            self._frame_cobrar_detalle.pack(fill="both", expand=True, padx=4)
 
-        self._cta_cargar()
+        self._cobrar_cargar_lista()
 
-    def _cta_buscar_evento(self, event=None):
-        self._cta_cargar(filtro=self._e_buscar_cta.get().strip())
+    def _cobrar_semaforo(self, deuda: float) -> tuple:
+        """Retorna (emoji, color, etiqueta) según el monto de deuda."""
+        if deuda <= 0:
+            return "🟢", s.C_GREEN, "Sin deuda"
+        elif deuda < 5:
+            return "🟡", s.C_YELLOW, "Debe esta semana"
+        elif deuda < 15:
+            return "🟠", s.C_ORANGE, "Debe varias semanas"
+        else:
+            return "🔴", s.C_ACCENT, "Moroso"
 
-    def _cta_cargar(self, filtro=""):
-        for w in self._frame_cuentas.winfo_children():
+    def _cobrar_cargar_lista(self):
+        for w in self._frame_cobrar_lista.winfo_children():
             w.destroy()
         try:
-            filas = db.obtener_cuentas()
-            if filtro:
-                filas = [f for f in filas if filtro.lower() in f[1].lower()]
+            cuentas = db.obtener_cuentas_con_deuda()
         except Exception as e:
             messagebox.showerror("Error", str(e))
             return
-            
-        for f in filas:
-            id_c, ref, tel, tipo, deuda, favor = f
-            card = self._card(self._frame_cuentas)
-            card.pack(fill="x", padx=4, pady=4)
-            card.grid_columnconfigure(0, weight=1)
 
-            r0 = ctk.CTkFrame(card, fg_color="transparent")
-            r0.grid(row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=(10, 2))
-            r0.grid_columnconfigure(0, weight=1)
+        total_deuda = sum(float(c[4]) for c in cuentas)
+        self._lbl_cobrar_resumen.configure(
+            text=f"{len(cuentas)} cuentas con deuda  ·  Total: ${total_deuda:.2f}"
+        )
 
-            ctk.CTkLabel(r0, text=ref, font=s.f_bold(), text_color=s.C_TEXT, anchor="w"
-                         ).grid(row=0, column=0, sticky="w")
+        # emoji no hay ninguna cuenta con deuda pendiente
+        img_no_deuda = self._cargar_icono("sindeuda.png", size=(32, 32))
 
-            tc = {"Estudiante": s.C_BLUE, "Docente": s.C_PURPLE,
-                  "Obrero": s.C_ORANGE, "Administrativo": s.C_GREEN}.get(tipo, s.C_BLUE)
-            ctk.CTkLabel(r0, text=f" {tipo} ", font=ctk.CTkFont(size=10, weight="bold"),
-                         fg_color=tc, corner_radius=6, text_color="white"
-                         ).grid(row=0, column=1, padx=(8, 0))
-
-            ctk.CTkLabel(card, text=f"📞 {tel}", font=s.f_small(), text_color=s.C_SUBTEXT, anchor="w"
-                         ).grid(row=1, column=0, padx=12, pady=2, sticky="w")
-
-            if float(deuda) > 0:
-                stxt, sc = f"⚠️  Deuda: ${float(deuda):.2f}", s.C_ACCENT
-            elif float(favor) > 0:
-                stxt, sc = f"✅  A favor: ${float(favor):.2f}", s.C_GREEN
-            else:
-                stxt, sc = "✔️  Sin saldo pendiente", s.C_SUBTEXT
-
-            ctk.CTkLabel(card, text=stxt, font=s.f_bold(), text_color=sc, anchor="w"
-                         ).grid(row=2, column=0, padx=12, pady=(2, 4), sticky="w")
-
-            bf = ctk.CTkFrame(card, fg_color="transparent")
-            bf.grid(row=3, column=0, columnspan=2, sticky="ew", padx=10, pady=(2, 10))
-
-            self._btn(bf, "👁  Personas", lambda i=id_c, r=ref: self._cta_seleccionar(i, r), color=s.C_BLUE).pack(side="left", padx=2)
-            
-            # Botón rápido para realizar abono inmediato
-            self._btn(bf, "💰 Abonar", lambda r=ref: self._hist_abono_directo(r), color=s.C_GREEN).pack(side="left", padx=2)
-            
-            self._btn(bf, "✏️", lambda v=(id_c, ref, tel, tipo): self._cta_editar(v), color="#555").pack(side="left", padx=2)
-
-    def _hist_abono_directo(self, nombre_cuenta: str):
-        """Abre la pasarela de abonos rellenando automáticamente el buscador de cuentas."""
-        self.abrir_historial()
-        self._hist_abono(filtro_inicial=nombre_cuenta)
-
-    def _cta_seleccionar(self, id_cuenta: int, ref: str):
-        self._cuenta_sel_id = id_cuenta
-        self._lbl_per_titulo.configure(text=f"👥  {ref}", text_color=s.C_TEXT)
-        self._btn_vincular.configure(state="normal")
-        self._per_cargar(id_cuenta)
-
-    def _cta_crear(self):
-        ref  = self._e_ref.get().strip()
-        tel  = self._e_tel.get().strip()
-        tipo = self._m_tipo.get()
-        if not ref or not tel:
-            messagebox.showwarning("Atención", "Nombre y teléfono son obligatorios.")
+        if not cuentas:
+            ctk.CTkLabel(
+                self._frame_cobrar_lista,
+                text="   No hay ninguna cuenta con deuda pendiente.",
+                font=s.f_normal(),
+                text_color=s.C_GREEN,
+                image=img_no_deuda,
+                compound="left"
+            ).pack(pady=30)
             return
-        tiene_hijos = False
-        if tipo != "Estudiante":
-            tiene_hijos = messagebox.askyesno(
-                "¿Tiene hijos en el colegio?",
-                f"¿{ref} tiene hijos estudiando aquí?\n\n• Sí → cuenta familiar\n• No → cuenta individual")
-        try:
-            id_nueva = db.crear_cuenta(ref, tel, tipo)
-            if tipo != "Estudiante" and not tiene_hijos:
-                partes = ref.strip().split()
-                nom = partes[0]
-                ape = " ".join(partes[1:]) if len(partes) > 1 else "—"
-                db.crear_persona(nom, ape, tipo, None, id_nueva)
-            messagebox.showinfo("✅ Cuenta creada", f"Cuenta '{ref}' creada.")
-            self._e_ref.delete(0, "end")
-            self._e_tel.delete(0, "end")
-            self._cta_cargar()
-        except Exception as e:
-            messagebox.showerror("Error", str(e))
 
-    def _cta_editar(self, vals: tuple):
-        id_c, ref, tel, tipo = vals
-        v = ctk.CTkToplevel(self)
-        v.title("Editar Cuenta"); v.geometry("440x300"); v.grab_set()
-        ctk.CTkLabel(v, text="Editar Cuenta", font=s.f_subtitulo()).pack(pady=(18, 10))
-        e_r = self._entry(v); e_r.insert(0, ref); e_r.pack(pady=6, padx=24, fill="x")
-        e_t = self._entry(v); e_t.insert(0, tel); e_t.pack(pady=6, padx=24, fill="x")
-        m   = self._opt(v, s.TIPOS_USUARIO); m.set(tipo); m.pack(pady=6, padx=24, fill="x")
-        def guardar():
-            try:
-                db.actualizar_cuenta(id_c, e_r.get().strip(), e_t.get().strip(), m.get())
-                messagebox.showinfo("✅", "Cuenta actualizada.")
-                self._cta_cargar(); v.destroy()
-            except Exception as e:
-                messagebox.showerror("Error", str(e))
-        self._btn(v, "💾  Guardar", guardar, color=s.C_GREEN).pack(pady=14, padx=24, fill="x")
+        for c in cuentas:
+            id_c, ref, tel, tipo, deuda = c
+            deuda = float(deuda)
+            emoji, color, etiqueta = self._cobrar_semaforo(deuda)
 
-    def _per_cargar(self, id_cuenta: int):
-        for w in self._frame_personas.winfo_children():
-            w.destroy()
-        try:
-            filas = db.obtener_personas(id_cuenta)
-        except Exception as e:
-            messagebox.showerror("Error", str(e)); return
-        if not filas:
-            ctk.CTkLabel(self._frame_personas, text="Sin personas vinculadas aún.", font=s.f_normal(), text_color=s.C_SUBTEXT
-                         ).pack(pady=20)
-            return
-        for f in filas:
-            id_p, nom, ape, tipo, grado = f
-            card = self._card(self._frame_personas)
-            card.pack(fill="x", padx=4, pady=5)
-            card.grid_columnconfigure(0, weight=1)
-            ctk.CTkLabel(card, text=f"{nom} {ape}", font=s.f_bold(), text_color=s.C_TEXT, anchor="w"
-                         ).grid(row=0, column=0, padx=12, pady=(10, 2), sticky="w")
-            ctk.CTkLabel(card, text=tipo + (f"  ·  {grado}" if grado else ""), font=s.f_small(), text_color=s.C_SUBTEXT, anchor="w"
-                         ).grid(row=1, column=0, padx=12, pady=(0, 6), sticky="w")
-            self._btn(card, "✏️  Editar", lambda d=(id_p, nom, ape, tipo, grado, id_cuenta): self._per_editar(d), color="#555"
-                      ).grid(row=0, column=1, rowspan=2, padx=10, pady=6)
-
-    def _per_abrir_form(self):
-        if not self._cuenta_sel_id:
-            return
-        id_c = self._cuenta_sel_id
-        v = ctk.CTkToplevel(self)
-        v.title("Vincular Persona"); v.geometry("440x380"); v.grab_set()
-        ctk.CTkLabel(v, text="Vincular Persona", font=s.f_subtitulo()).pack(pady=(18, 8))
-        e_n = self._entry(v, ph="Nombre"); e_n.pack(pady=5, padx=24, fill="x")
-        e_a = self._entry(v, ph="Apellido"); e_a.pack(pady=5, padx=24, fill="x")
-        e_g = self._entry(v, ph="Grado/Sección (opcional)"); e_g.pack(pady=5, padx=24, fill="x")
-        m   = self._opt(v, s.TIPOS_USUARIO); m.pack(pady=5, padx=24, fill="x")
-        def guardar():
-            if not e_n.get().strip() or not e_a.get().strip():
-                messagebox.showwarning("Atención", "Nombre y apellido obligatorios.", parent=v); return
-            try:
-                db.crear_persona(e_n.get().strip(), e_a.get().strip(), m.get(), e_g.get().strip(), id_c)
-                messagebox.showinfo("✅", f"{e_n.get()} vinculado.", parent=v)
-                self._per_cargar(id_c); v.destroy()
-            except Exception as e:
-                messagebox.showerror("Error", str(e), parent=v)
-        self._btn(v, "💾  Guardar", guardar, color=s.C_GREEN).pack(pady=14, padx=24, fill="x")
-
-    def _per_editar(self, datos: tuple):
-        id_p, nom, ape, tipo, grado, id_c = datos
-        v = ctk.CTkToplevel(self)
-        v.title("Editar Persona"); v.geometry("440x380"); v.grab_set()
-        ctk.CTkLabel(v, text="Editar Persona", font=s.f_subtitulo()).pack(pady=(18, 8))
-        e_n = self._entry(v); e_n.insert(0, nom); e_n.pack(pady=5, padx=24, fill="x")
-        e_a = self._entry(v); e_a.insert(0, ape); e_a.pack(pady=5, padx=24, fill="x")
-        e_g = self._entry(v, ph="Grado/Sección (opcional)"); e_g.insert(0, grado or ""); e_g.pack(pady=5, padx=24, fill="x")
-        m   = self._opt(v, s.TIPOS_USUARIO); m.set(tipo); m.pack(pady=5, padx=24, fill="x")
-        def guardar():
-            try:
-                db.actualizar_persona(id_p, e_n.get().strip(), e_a.get().strip(), m.get(), e_g.get().strip())
-                messagebox.showinfo("✅", "Persona actualizada.")
-                self._per_cargar(id_c); v.destroy()
-            except Exception as e:
-                messagebox.showerror("Error", str(e))
-        self._btn(v, "💾  Guardar", guardar, color=s.C_GREEN).pack(pady=14, padx=24, fill="x")
-
-    # ============================================================
-    # MÓDULO: HISTORIAL
-    # ============================================================
-
-    def abrir_historial(self):
-        container = self._mostrar_vista("historial")
-        
-        if not container.winfo_children():
-            container.grid_columnconfigure(0, weight=1)
-            container.grid_rowconfigure(0, weight=0)  # cabecera: tamaño fijo
-            container.grid_rowconfigure(1, weight=1)  # cuerpo: se expande
-
-            cab = self._card(container)
-            cab.grid(row=0, column=0, sticky="ew", padx=10, pady=(4, 4))
-            cab.grid_columnconfigure(1, weight=1)
-
-            ctk.CTkLabel(cab, text="📋  Historial", font=s.f_subtitulo(), text_color=s.C_TEXT
-                         ).grid(row=0, column=0, padx=12, pady=8)
-
-            self._e_buscar_hist = self._entry(cab, ph="🔍  Buscar por cuenta o persona...")
-            self._e_buscar_hist.grid(row=0, column=1, sticky="ew", padx=8, pady=8)
-            self._e_buscar_hist.bind("<KeyRelease>", self._hist_buscar)
-
-            self._btn(cab, "💰  Abono/Pago", self._hist_abono, color=s.C_BLUE
-                      ).grid(row=0, column=2, padx=8, pady=8)
-
-            cuerpo = ctk.CTkFrame(container, corner_radius=0, fg_color=s.C_BG)
-            cuerpo.grid(row=1, column=0, sticky="nsew", padx=10, pady=(2, 6))
-            cuerpo.grid_columnconfigure(0, weight=2)
-            cuerpo.grid_columnconfigure(1, weight=1)
-            cuerpo.grid_rowconfigure(0, weight=1)
-
-            self._frame_trans = ctk.CTkScrollableFrame(cuerpo, fg_color="transparent", corner_radius=0)
-            self._frame_trans.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-            self._frame_trans.grid_columnconfigure(0, weight=1)
-
-            self._panel_detalle = self._card(cuerpo)
-            self._panel_detalle.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
-            self._panel_detalle.grid_columnconfigure(0, weight=1)
-            
-            self._lbl_placeholder_detalle = ctk.CTkLabel(self._panel_detalle, text="Selecciona un pedido\npara ver el detalle",
-                                                         font=s.f_normal(), text_color=s.C_SUBTEXT)
-            self._lbl_placeholder_detalle.pack(pady=40)
-
-        self._hist_cargar()
-
-    def _hist_cargar(self, filtro: str = ""):
-        for w in self._frame_trans.winfo_children():
-            w.destroy()
-        try:
-            filas = db.obtener_historial(filtro)
-        except Exception as e:
-            messagebox.showerror("Error", str(e)); return
-
-        for f in filas:
-            id_t, persona, cuenta, fecha, usd, bs, metodo, tipo = f
-            es_abono   = tipo == "Abono"
-            card_color = ("#eaf7ee", "#0d2b18") if es_abono else s.C_CARD
-            card = ctk.CTkFrame(self._frame_trans, corner_radius=12, fg_color=card_color)
+            card = self._card(self._frame_cobrar_lista)
             card.pack(fill="x", padx=4, pady=4)
             card.grid_columnconfigure(0, weight=1)
 
             r0 = ctk.CTkFrame(card, fg_color="transparent")
             r0.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 2))
             r0.grid_columnconfigure(0, weight=1)
-            ctk.CTkLabel(r0, text=persona, font=s.f_bold(), text_color=s.C_TEXT, anchor="w"
-                         ).grid(row=0, column=0, sticky="w")
-            ctk.CTkLabel(r0, text="💰 ABONO" if es_abono else "🛒 COMPRA", font=ctk.CTkFont(size=10, weight="bold"),
-                         fg_color=s.C_GREEN if es_abono else s.C_BLUE, corner_radius=6, text_color="white"
-                         ).grid(row=0, column=1)
+            ctk.CTkLabel(
+                r0,
+                text=f"{emoji}  {ref}",
+                font=s.f_bold(),
+                text_color=s.C_TEXT,
+                anchor="w",
+            ).grid(row=0, column=0, sticky="w")
+            ctk.CTkLabel(
+                r0,
+                text=f"${deuda:.2f}",
+                font=ctk.CTkFont(size=15, weight="bold"),
+                text_color=color,
+            ).grid(row=0, column=1)
 
-            ctk.CTkLabel(card, text=f"📁 {cuenta}  ·  📅 {fmt_fecha(fecha)}", font=s.f_small(), text_color=s.C_SUBTEXT, anchor="w"
-                         ).grid(row=1, column=0, padx=12, pady=1, sticky="w")
-            ctk.CTkLabel(card, text=f"${float(usd):.2f}  ·  Bs.{float(bs):,.0f}  ·  {metodo}", font=s.f_bold(),
-                         text_color=s.C_GREEN if es_abono else s.C_YELLOW, anchor="w"
-                         ).grid(row=2, column=0, padx=12, pady=(1, 4), sticky="w")
+            ctk.CTkLabel(
+                card, text=etiqueta, font=s.f_small(), text_color=color, anchor="w"
+            ).grid(row=1, column=0, padx=12, pady=(0, 8), sticky="w")
+
+            # Botón "Ver Detalle" para abrir la vista de detalle de la cuenta y whatsapp
+            img_ver_detalle = self._cargar_icono("ojos.png", size=(18, 18))
+            img_whatsapp = self._cargar_icono("whatsapp.png", size=(18, 18))
+
+            self._btn(
+                card,
+                "   Ver Detalle",
+                lambda i=id_c, r=ref, t=tel, d=deuda: self._cobrar_seleccionar(
+                    i, r, t, d
+                ),
+                color=s.C_BLUE,
+                image=img_ver_detalle,
+                compound="left"
+            ).grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 10))
+
+    def _cobrar_seleccionar(self, id_cuenta: int, ref: str, tel: str, deuda: float):
+        
+        img_titulo_cuenta = self._cargar_icono("tarjeta.png", size=(18, 18))
+        
+        self._lbl_cobrar_titulo.configure(text=f"   {ref}", image=img_titulo_cuenta, compound="left", text_color=s.C_TEXT)
+        for w in self._frame_cobrar_detalle.winfo_children():
+            w.destroy()
+
+        try:
+            detalle = db.obtener_detalle_deuda_cuenta(id_cuenta)
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+            return
+
+        resumen = self._card(self._frame_cobrar_detalle)
+        resumen.pack(fill="x", padx=4, pady=(0, 8))
+        ctk.CTkLabel(
+            resumen,
+            text=f"Deuda total: ${deuda:.2f}",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=s.C_ACCENT,
+        ).pack(pady=12)
+        self._btn(
+            resumen,
+            "   Generar Mensaje WhatsApp",
+            lambda: self._cobrar_generar_whatsapp(ref, tel, detalle, deuda),
+            color="#25D366",
+            image=self._cargar_icono("whatsapp.png", size=(18, 18)),
+            compound="left"
+        ).pack(fill="x", padx=14, pady=(0, 12))
+
+        if not detalle:
+            ctk.CTkLabel(
+                self._frame_cobrar_detalle,
+                text="Sin pedidos pendientes de pago.",
+                font=s.f_normal(),
+                text_color=s.C_SUBTEXT,
+            ).pack(pady=20)
+            return
+
+        ctk.CTkLabel(
+            self._frame_cobrar_detalle,
+            text="Detalle de pedidos:",
+            font=s.f_bold(),
+            text_color=s.C_TEXT,
+        ).pack(anchor="w", padx=4, pady=(4, 4))
+
+        for d in detalle:
+            id_ped, persona, fecha, total, pagado, pendiente, estado = d
+            total, pagado, pendiente = float(total), float(pagado), float(pendiente)
+            card = self._card(self._frame_cobrar_detalle)
+            card.pack(fill="x", padx=4, pady=3)
+            card.grid_columnconfigure(0, weight=1)
+
+            r0 = ctk.CTkFrame(card, fg_color="transparent")
+            r0.grid(row=0, column=0, sticky="ew", padx=12, pady=(8, 1))
+            r0.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(
+                r0,
+                text=f"{fmt_fecha_corta(fecha)} · {persona}",
+                font=s.f_bold(),
+                text_color=s.C_TEXT,
+                anchor="w",
+            ).grid(row=0, column=0, sticky="w")
+            ctk.CTkLabel(
+                r0, text=f"${pendiente:.2f}", font=s.f_bold(), text_color=s.C_ACCENT
+            ).grid(row=0, column=1)
+
+            try:
+                items = db.obtener_detalle_pedido(id_ped)
+                items_txt = ", ".join(f"{i[0]} x{i[1]}" for i in items)
+            except Exception:
+                items_txt = ""
+            ctk.CTkLabel(
+                card,
+                text=items_txt,
+                font=s.f_small(),
+                text_color=s.C_SUBTEXT,
+                anchor="w",
+                wraplength=340,
+            ).grid(row=1, column=0, padx=12, pady=(0, 2), sticky="w")
+
+            info_pago = f"Total ${total:.2f}"
+            if pagado > 0:
+                info_pago += f"  ·  Abonado ${pagado:.2f}  ({estado})"
+            ctk.CTkLabel(
+                card,
+                text=info_pago,
+                font=s.f_small(),
+                text_color=s.C_GREEN if pagado > 0 else s.C_SUBTEXT,
+                anchor="w",
+            ).grid(row=2, column=0, padx=12, pady=(0, 4), sticky="w")
+
+            # emoji de registrar pago y eliminar pedido
+            img_registrar_pago = self._cargar_icono("bolsa_dinero.png", size=(18, 18))
+            img_eliminar_pedido = self._cargar_icono("borrar.png", size=(18, 18))
 
             bf = ctk.CTkFrame(card, fg_color="transparent")
-            bf.grid(row=3, column=0, sticky="ew", padx=10, pady=(2, 10))
-            self._btn(bf, "🔍 Detalle", lambda i=id_t: self._hist_detalle(i), color=s.C_BLUE).pack(side="left", padx=4)
-            self._btn(bf, "✏️ Editar", lambda d=(id_t, float(usd), metodo): self._hist_editar(d), color="#555").pack(side="left", padx=4)
-            self._btn(bf, "🗑️ Eliminar", lambda i=id_t: self._hist_eliminar(i), color=s.C_ACCENT).pack(side="left", padx=4)
+            bf.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 8))
+            self._btn(
+                bf,
+                "  Registrar Pago",
+                lambda i=id_ped, ic=id_cuenta, p=pendiente, r=ref: self._cobrar_abrir_pago(
+                    i, ic, p, r
+                ),
+                color=s.C_GREEN,
+                height=32,
+                image=img_registrar_pago,
+                compound="left"
+            ).pack(side="left", padx=4)
+            self._btn(
+                bf,
+                "  Eliminar Pedido",
+                lambda i=id_ped, ic=id_cuenta, r=ref, t=tel: self._cobrar_eliminar_pedido(
+                    i, ic, r, t
+                ),
+                color="#555",
+                height=32,
+                image=img_eliminar_pedido,
+                compound="left"
+            ).pack(side="left", padx=4)
 
-    def _hist_buscar(self, event=None):
-        self._hist_cargar(self._e_buscar_hist.get().strip())
-
-    def _hist_detalle(self, id_trans: int):
-        for w in self._panel_detalle.winfo_children():
-            w.destroy()
-        ctk.CTkLabel(self._panel_detalle, text="📦  Detalle", font=s.f_bold(), text_color=s.C_TEXT).pack(pady=(14, 8))
-        try:
-            filas = db.obtener_detalle_transaccion(id_trans)
-        except Exception as e:
-            messagebox.showerror("Error", str(e)); return
-        if not filas:
-            ctk.CTkLabel(self._panel_detalle, text="(Abono — sin productos)", font=s.f_normal(), text_color=s.C_SUBTEXT
-                         ).pack(pady=10)
-            return
-        for f in filas:
-            item = self._card(self._panel_detalle)
-            item.pack(fill="x", padx=10, pady=3)
-            item.grid_columnconfigure(0, weight=1)
-            ctk.CTkLabel(item, text=f[0], font=s.f_bold(), text_color=s.C_TEXT, anchor="w"
-                         ).grid(row=0, column=0, padx=10, pady=(8, 2), sticky="w")
-            ctk.CTkLabel(item, text=f"x{f[1]}  ·  ${float(f[2]):.2f}  ·  ${float(f[3]):.2f}", font=s.f_small(), text_color=s.C_SUBTEXT, anchor="w"
-                         ).grid(row=1, column=0, padx=10, pady=(0, 8), sticky="w")
-
-    def _hist_editar(self, datos: tuple):
-        id_t, monto, metodo = datos
+    def _cobrar_abrir_pago(
+        self, id_pedido: int, id_cuenta: int, pendiente: float, ref: str
+    ):
         v = ctk.CTkToplevel(self)
-        v.title("Editar Transacción"); v.geometry("400x260"); v.grab_set()
-        ctk.CTkLabel(v, text="Editar Transacción", font=s.f_subtitulo()).pack(pady=(18, 10))
-        e_m = self._entry(v, ph="Monto en $"); e_m.insert(0, str(monto)); e_m.pack(pady=6, padx=24, fill="x")
-        m_met = self._opt(v, s.METODOS_PAGO); m_met.set(metodo); m_met.pack(pady=6, padx=24, fill="x")
-        def guardar():
+        v.title("Registrar Pago")
+        v.geometry("380x260")
+        v.grab_set()
+        ctk.CTkLabel(v, text=f"Registrar Pago — {ref}", font=s.f_subtitulo()).pack(
+            pady=(18, 4)
+        )
+        ctk.CTkLabel(
+            v,
+            text=f"Pendiente: ${pendiente:.2f}",
+            font=s.f_bold(),
+            text_color=s.C_ACCENT,
+        ).pack(pady=(0, 10))
+
+        e_monto = self._entry(v, ph=f"Monto (máx ${pendiente:.2f})")
+        e_monto.insert(0, f"{pendiente:.2f}")
+        e_monto.pack(pady=6, padx=24, fill="x")
+
+        m_met = self._opt(
+            v, ["Efectivo $", "Efectivo Bs", "Pago Móvil", "Transferencia"]
+        )
+        m_met.pack(pady=6, padx=24, fill="x")
+
+        def confirmar():
             try:
-                db.actualizar_transaccion(id_t, float(e_m.get()), m_met.get(), self.tasa_bcv)
-                messagebox.showinfo("✅", "Transacción actualizada.", parent=v)
-                self._hist_cargar(); v.destroy()
+                monto = float(e_monto.get().strip())
+                if monto <= 0 or monto > pendiente + 0.01:
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror(
+                    "Error",
+                    f"Monto inválido. Debe ser entre 0 y ${pendiente:.2f}",
+                    parent=v,
+                )
+                return
+            try:
+                db.registrar_pago(
+                    id_pedido, id_cuenta, monto, self.tasa_bcv, m_met.get()
+                )
+                messagebox.showinfo("✅", f"Pago de ${monto:.2f} registrado.", parent=v)
+                v.destroy()
+                self._cobrar_cargar_lista()
+                self._lbl_cobrar_titulo.configure(
+                    text="👈  Selecciona una cuenta", text_color=s.C_SUBTEXT
+                )
+                for w in self._frame_cobrar_detalle.winfo_children():
+                    w.destroy()
             except Exception as e:
                 messagebox.showerror("Error", str(e), parent=v)
-        self._btn(v, "💾  Guardar", guardar, color=s.C_GREEN).pack(pady=14, padx=24, fill="x")
 
-    def _hist_eliminar(self, id_trans: int):
-        if not messagebox.askyesno("Confirmar", "¿Eliminar esta transacción?\nEsta acción recalculará los saldos y no se puede deshacer."):
+        self._btn(v, "✅  Confirmar Pago", confirmar, color=s.C_GREEN).pack(
+            pady=16, padx=24, fill="x"
+        )
+
+    def _cobrar_eliminar_pedido(
+        self, id_pedido: int, id_cuenta: int, ref: str, tel: str
+    ):
+        if not messagebox.askyesno(
+            "Confirmar",
+            "¿Eliminar este pedido completo?\nEsta acción no se puede deshacer.",
+        ):
             return
         try:
-            db.eliminar_transaccion(id_trans)
-            messagebox.showinfo("✅", "Transacción eliminada con éxito.")
-            self._hist_cargar()
-            for w in self._panel_detalle.winfo_children():
+            db.eliminar_pedido(id_pedido)
+            messagebox.showinfo("✅", "Pedido eliminado.")
+            self._cobrar_cargar_lista()
+            self._lbl_cobrar_titulo.configure(
+                text="👈  Selecciona una cuenta", text_color=s.C_SUBTEXT
+            )
+            for w in self._frame_cobrar_detalle.winfo_children():
                 w.destroy()
-            ctk.CTkLabel(self._panel_detalle, text="Selecciona un pedido\npara ver el detalle", font=s.f_normal(), text_color=s.C_SUBTEXT).pack(pady=40)
         except Exception as e:
             messagebox.showerror("Error", str(e))
 
-    def _hist_abono(self, filtro_inicial: str = ""):
-        v = ctk.CTkToplevel(self)
-        v.title("Registrar Abono / Pago")
-        v.geometry("460x440"); v.grab_set()
-        ctk.CTkLabel(v, text="💰  Registrar Abono o Pago", font=s.f_subtitulo()).pack(pady=(18, 6))
-        
-        e_b = self._entry(v, ph="🔍  Buscar cuenta...")
-        e_b.pack(pady=6, padx=20, fill="x")
-
-        frame_ctas = ctk.CTkScrollableFrame(v, height=130)
-        frame_ctas.pack(fill="x", padx=20, pady=4)
-        self._abono_cta = None
-
-        lbl_sel = ctk.CTkLabel(v, text="⚠️  Sin cuenta seleccionada", font=s.f_bold(), text_color=s.C_ORANGE)
-        lbl_sel.pack(pady=4)
-
-        def buscar(event=None):
-            for w in frame_ctas.winfo_children():
-                w.destroy()
-            txt = e_b.get().strip()
-            if len(txt) < 2:
-                return
+    def _cobrar_generar_whatsapp(self, ref: str, tel: str, detalle: list, deuda: float):
+        lineas = []
+        for d in detalle:
+            id_ped, persona, fecha, total, pagado, pendiente, estado = d
             try:
-                filas = db.buscar_cuentas(txt)
-            except Exception as e:
-                messagebox.showerror("Error", str(e), parent=v); return
-            for f in filas:
-                id_c, ref, deuda = f
-                ctk.CTkButton(
-                    frame_ctas, text=f"  {ref}  —  Deuda: ${float(deuda):.2f}",
-                    anchor="w", height=36, font=s.f_normal(),
-                    fg_color=("#dde3f0", "#1e2a45"), text_color=s.C_TEXT, hover_color=s.C_BLUE,
-                    corner_radius=8, command=lambda d=(id_c, ref): sel(d)
-                ).pack(fill="x", pady=2)
+                items = db.obtener_detalle_pedido(id_ped)
+                items_txt = ", ".join(f"{i[0]} x{i[1]}" for i in items)
+            except Exception:
+                items_txt = "pedido"
+            lineas.append(
+                f"• {fmt_fecha_corta(fecha)}: {items_txt} — ${float(pendiente):.2f}"
+            )
 
-        def sel(data):
-            self._abono_cta = data
-            lbl_sel.configure(text=f"✅  {data[1]}", text_color=s.C_GREEN)
-            for w in frame_ctas.winfo_children():
-                w.destroy()
+        detalle_txt = "\n".join(lineas) if lineas else "Sin pedidos pendientes."
+        mensaje = (
+            f"Hola, buenos días. Le saluda la Cantina Escolar R.R. 🍽️\n\n"
+            f"Le informamos el consumo pendiente de pago de *{ref}*:\n\n"
+            f"{detalle_txt}\n\n"
+            f"💰 Total pendiente: *${deuda:.2f}*\n\n"
+            f"Agradecemos su colaboración para cancelar el pago.\n"
+            f"¡Muchas gracias!"
+        )
+        wa_abrir_link(tel, mensaje)
 
-        e_b.bind("<KeyRelease>", buscar)
-
-        fp = ctk.CTkFrame(v, fg_color="transparent")
-        fp.pack(fill="x", padx=20, pady=8)
-        fp.grid_columnconfigure(0, weight=1)
-        fp.grid_columnconfigure(1, weight=1)
-
-        ctk.CTkLabel(fp, text="Monto ($):", font=s.f_normal()).grid(row=0, column=0)
-        ctk.CTkLabel(fp, text="Método:", font=s.f_normal()).grid(row=0, column=1)
-
-        e_m = self._entry(fp, ph="Ej: 5.00")
-        e_m.grid(row=1, column=0, padx=6, sticky="ew")
-        m_met = self._opt(fp, ["Efectivo", "Pago Móvil", "Transferencia"])
-        m_met.grid(row=1, column=1, padx=6, sticky="ew")
-
-        def confirmar():
-            if not self._abono_cta:
-                messagebox.showwarning("Atención", "Selecciona una cuenta.", parent=v); return
+    def _cobrar_masivo(self):
+        try:
+            cuentas = db.obtener_cuentas_con_deuda()
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+            return
+        if not cuentas:
+            messagebox.showinfo("Sin deudas", "No hay cuentas con deuda pendiente.")
+            return
+        if not messagebox.askyesno(
+            "Confirmar envío masivo",
+            f"Se abrirán {len(cuentas)} pestañas de WhatsApp, una por cada "
+            f"cuenta con deuda. ¿Continuar?",
+        ):
+            return
+        for c in cuentas:
+            id_c, ref, tel, tipo, deuda = c
             try:
-                monto = float(e_m.get().strip())
-                if monto <= 0:
-                    raise ValueError
-            except ValueError:
-                messagebox.showerror("Error", "Monto inválido.", parent=v)
-                return
-            try:
-                db.registrar_abono(self._abono_cta[0], monto, self.tasa_bcv, m_met.get())
-                messagebox.showinfo(
-                    "✅ Abono Registrado",
-                    f"Cuenta: {self._abono_cta[1]}\nAbono: ${monto:.2f} / Bs.{monto*self.tasa_bcv:,.0f}\nMétodo: {m_met.get()}", parent=v)
-                self._hist_cargar(); v.destroy()
-            except Exception as e:
-                messagebox.showerror("Error", str(e), parent=v)
-
-        self._btn(v, "✅  Confirmar Abono", confirmar, color=s.C_GREEN).pack(pady=14, padx=20, fill="x")
-
-        if filtro_inicial:
-            e_b.insert(0, filtro_inicial)
-            buscar()
+                detalle = db.obtener_detalle_deuda_cuenta(id_c)
+                self._cobrar_generar_whatsapp(ref, tel, detalle, float(deuda))
+            except Exception:
+                continue
 
     # ============================================================
     # MÓDULO: PRODUCTOS
@@ -1033,18 +1618,29 @@ class App(ctk.CTk):
 
     def abrir_productos(self):
         container = self._mostrar_vista("productos")
-        
         if not container.winfo_children():
             container.grid_columnconfigure(0, weight=1)
-            container.grid_rowconfigure(0, weight=0)  # cabecera: tamaño fijo
-            container.grid_rowconfigure(1, weight=1)  # productos: se expande
+            container.grid_rowconfigure(0, weight=0)
+            container.grid_rowconfigure(1, weight=0)  # tabs categoría
+            container.grid_rowconfigure(2, weight=1)  # grid productos
 
+            # Formulario de nuevo producto
             top = self._card(container)
             top.grid(row=0, column=0, sticky="ew", padx=10, pady=(4, 4))
             top.grid_columnconfigure(0, weight=1)
 
-            ctk.CTkLabel(top, text="🍔  Gestión de Productos", font=s.f_subtitulo(), text_color=s.C_TEXT
-                         ).grid(row=0, column=0, columnspan=5, pady=(6, 4))
+            # icono de gestión de productos de hamburguesa y de guardar
+            img_gestion_prod = self._cargar_icono("hamburguesa.png", size=(18, 18))
+            img_guardar_prod = self._cargar_icono("guardar.png", size=(18, 18))
+
+            ctk.CTkLabel(
+                top,
+                text="   Gestión de Productos",
+                font=s.f_subtitulo(),
+                text_color=s.C_TEXT,
+                image=img_gestion_prod,
+                compound="left"
+            ).grid(row=0, column=0, columnspan=5, pady=(8, 4))
 
             self._e_nom_p = self._entry(top, ph="Nombre del producto")
             self._e_nom_p.grid(row=1, column=0, sticky="ew", padx=8, pady=6)
@@ -1055,22 +1651,65 @@ class App(ctk.CTk):
             self._e_precio_p = self._entry(top, ph="Precio $", width=100)
             self._e_precio_p.grid(row=1, column=2, padx=6, pady=6)
 
-            self._btn(top, "💾  Guardar", self._prod_guardar, color=s.C_GREEN
-                      ).grid(row=1, column=3, padx=6, pady=6)
+            self._btn(top, "   Guardar", self._prod_guardar, image=img_guardar_prod, compound="left", color=s.C_GREEN).grid(
+                row=1, column=3, padx=6, pady=6
+            )
 
-            # Buscador de productos
-            self._e_buscar_prod_gestion = self._entry(top, ph="🔍 Filtrar productos...")
+            self._e_buscar_prod_gestion = self._entry(top, ph="🔍 Filtrar...")
             self._e_buscar_prod_gestion.grid(row=1, column=4, padx=6, pady=6)
-            self._e_buscar_prod_gestion.bind("<KeyRelease>", lambda e: self._prod_cargar(filtro=self._e_buscar_prod_gestion.get().strip()))
+            self._e_buscar_prod_gestion.bind(
+                "<KeyRelease>",
+                lambda e: self._prod_cargar(self._e_buscar_prod_gestion.get().strip()),
+            )
 
-            self._frame_prods = ctk.CTkScrollableFrame(container, fg_color="transparent", corner_radius=0)
-            self._frame_prods.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 6))
+            # Tabs por categoría — muestra solo una a la vez (más rápido)
+            tabs_p = ctk.CTkFrame(container, fg_color="transparent")
+            tabs_p.grid(row=1, column=0, sticky="ew", padx=10, pady=(2, 4))
+            self._prod_tab_activa = s.CATEGORIAS[0]
+            self._prod_tab_btns = {}
+            for cat in s.CATEGORIAS:
+                b = ctk.CTkButton(
+                    tabs_p,
+                    text=cat,
+                    height=32,
+                    font=ctk.CTkFont(size=12, weight="bold"),
+                    fg_color=s.CAT_COLORS[cat],
+                    hover_color=s.hover(s.CAT_COLORS[cat]),
+                    corner_radius=18,
+                    command=lambda c=cat: self._prod_cambiar_tab(c),
+                )
+                b.pack(side="left", padx=4)
+                self._prod_tab_btns[cat] = b
 
-        self._prod_cargar()
+            self._frame_prods = ctk.CTkScrollableFrame(
+                container, fg_color="transparent", corner_radius=0
+            )
+            self._frame_prods.grid(row=2, column=0, sticky="nsew", padx=10, pady=(0, 6))
+
+        self._prod_cambiar_tab(
+            self._prod_tab_activa
+            if hasattr(self, "_prod_tab_activa")
+            else s.CATEGORIAS[0]
+        )
+
+    def _prod_cambiar_tab(self, cat: str):
+        """Carga solo la categoría seleccionada — evita renderizar 73 cards de golpe."""
+        self._prod_tab_activa = cat
+        if hasattr(self, "_prod_tab_btns"):
+            for c, b in self._prod_tab_btns.items():
+                b.configure(
+                    fg_color=s.CAT_COLORS[c] if c == cat else ("#aaa", "#3a3a5c")
+                )
+        filtro = (
+            self._e_buscar_prod_gestion.get().strip()
+            if hasattr(self, "_e_buscar_prod_gestion")
+            else ""
+        )
+        self._prod_cargar(filtro=filtro, categoria=cat)
 
     def _prod_guardar(self):
         nombre = self._e_nom_p.get().strip()
-        cat    = self._m_cat_p.get()
+        cat = self._m_cat_p.get()
         precio = self._e_precio_p.get().strip()
         if not nombre or not precio:
             messagebox.showwarning("Atención", "Nombre y precio son obligatorios.")
@@ -1078,7 +1717,8 @@ class App(ctk.CTk):
         try:
             pval = float(precio)
         except ValueError:
-            messagebox.showerror("Error", "Precio inválido."); return
+            messagebox.showerror("Error", "Precio inválido.")
+            return
         try:
             db.guardar_producto(nombre, cat, pval)
             messagebox.showinfo("✅", f"'{nombre}' guardado.")
@@ -1088,116 +1728,163 @@ class App(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Error", str(e))
 
-    def _prod_cargar(self, filtro: str = ""):
-        """
-        Reconstruye el grid de productos.
-        Si se pasa filtro, solo muestra los que coincidan con el nombre.
-        """
+    def _prod_cargar(self, filtro: str = "", categoria: str = None):
         for w in self._frame_prods.winfo_children():
             w.destroy()
         try:
             categorias = db.obtener_todos_productos()
         except Exception as e:
-            messagebox.showerror("Error", str(e)); return
+            messagebox.showerror("Error", str(e))
+            return
 
+        cat_activa = categoria or (
+            self._prod_tab_activa if hasattr(self, "_prod_tab_activa") else None
+        )
+        
+        # Cargar tres emojis de estado: ✅ disponible, ❌ agotado, ⚠️ sin stock
+        img_disponible = self._cargar_icono("check.png", size=(18, 18))
+        img_agotado = self._cargar_icono("cruz.png", size=(18, 18))
+        # img_sin_stock = self._cargar_icono("sinstock.png", size=(18, 18))
+        img_editar = self._cargar_icono("lapiz.png", size=(18, 18))
+        
         for cat, prods in categorias.items():
+            # Solo renderizar la categoría activa (salvo cuando hay filtro de texto)
+            if not filtro and cat_activa and cat != cat_activa:
+                continue
             if filtro:
                 prods = [p for p in prods if filtro.lower() in p[1].lower()]
             if not prods:
                 continue
-
+                
             color = s.CAT_COLORS.get(cat, s.C_BLUE)
-            ctk.CTkLabel(self._frame_prods, text=f"  {cat}",
-                         font=s.f_bold(), text_color=color, anchor="w"
-                         ).pack(fill="x", padx=6, pady=(10, 2))
-
+            ctk.CTkLabel(
+                self._frame_prods,
+                text=f"  {cat}",
+                font=s.f_bold(),
+                text_color=color,
+                anchor="w",
+            ).pack(fill="x", padx=6, pady=(10, 2))
+            
             grid = ctk.CTkFrame(self._frame_prods, fg_color="transparent")
             grid.pack(fill="x", padx=4)
             cols = 4
-
+            
             for i, (id_p, nom, _, precio, estado) in enumerate(prods):
-                p    = float(precio)
+                p = float(precio)
                 disp = estado == "Disponible"
+                
                 card = self._card(grid)
                 card.grid(row=i // cols, column=i % cols, padx=4, pady=4, sticky="ew")
                 card.grid_columnconfigure(0, weight=1)
-
-                ctk.CTkLabel(card, text=nom, font=s.f_bold(),
-                             text_color=s.C_TEXT if disp else s.C_SUBTEXT, anchor="w"
-                             ).grid(row=0, column=0, padx=10, pady=(8, 1), sticky="w")
-
-                ctk.CTkLabel(card, text=f"${p:.2f}  ·  Bs.{p * self.tasa_bcv:,.0f}",
-                             font=s.f_small(), text_color=color, anchor="w"
-                             ).grid(row=1, column=0, padx=10, pady=(0, 3), sticky="w")
-
+                ctk.CTkLabel(
+                    card,
+                    text=nom,
+                    font=s.f_bold(),
+                    text_color=s.C_TEXT if disp else s.C_SUBTEXT,
+                    anchor="w",
+                ).grid(row=0, column=0, padx=10, pady=(8, 1), sticky="w")
+                ctk.CTkLabel(
+                    card,
+                    text=f"${p:.2f}  ·  Bs.{p*self.tasa_bcv:,.0f}",
+                    font=s.f_small(),
+                    text_color=color,
+                    anchor="w",
+                ).grid(row=1, column=0, padx=10, pady=(0, 3), sticky="w")
                 btn_row = ctk.CTkFrame(card, fg_color="transparent")
                 btn_row.grid(row=2, column=0, padx=6, pady=(0, 6), sticky="ew")
                 btn_row.grid_columnconfigure(0, weight=1)
                 btn_row.grid_columnconfigure(1, weight=0)
-
-                self._btn(btn_row,
-                          "✅ Disp." if disp else "❌ Agotado",
-                          lambda i=id_p, d=disp: self._prod_toggle(i, d),
-                          color=s.C_ORANGE if disp else "#555", height=26
-                          ).grid(row=0, column=0, sticky="ew", padx=(0, 3))
-
-                self._btn(btn_row, "✏️",
-                          lambda d=(id_p, nom, cat, p, estado): self._prod_editar(d),
-                          color="#444", height=26, width=34
-                          ).grid(row=0, column=1)
-
+                
+                self._btn(
+                    btn_row,
+                    "  Disp." if disp else "  Agotado",
+                    lambda i=id_p, d=disp: self._prod_toggle(i, d),
+                    color=s.C_ORANGE if disp else "#555",
+                    height=26,
+                    image=img_disponible if disp else img_agotado
+                ).grid(row=0, column=0, sticky="ew", padx=(0, 3))
+                
+                self._btn(
+                    btn_row,
+                    "",
+                    lambda d=(id_p, nom, cat, p, estado): self._prod_editar(d),
+                    color="#444",
+                    height=26,
+                    width=34,
+                    image=img_editar
+                ).grid(row=0, column=1)
             for c in range(cols):
                 grid.grid_columnconfigure(c, weight=1)
 
     def _prod_toggle(self, id_prod: int, disponible: bool):
         try:
             db.toggle_estado_producto(id_prod, disponible)
-            filtro = self._e_buscar_prod_gestion.get().strip() if hasattr(self, "_e_buscar_prod_gestion") else ""
-            self._prod_cargar(filtro=filtro)
+            filtro = (
+                self._e_buscar_prod_gestion.get().strip()
+                if hasattr(self, "_e_buscar_prod_gestion")
+                else ""
+            )
+            self._prod_cargar(filtro)
         except Exception as e:
             messagebox.showerror("Error", str(e))
 
     def _prod_editar(self, datos: tuple):
-        """Ventana para editar nombre, categoría, precio y estado de un producto."""
         id_p, nom, cat, precio, estado = datos
         v = ctk.CTkToplevel(self)
-        v.title("Editar Producto"); v.geometry("420x360"); v.grab_set()
-
-        ctk.CTkLabel(v, text="Editar Producto",
-                     font=s.f_subtitulo()).pack(pady=(18, 8))
-
-        e_nom = self._entry(v, ph="Nombre del producto")
-        e_nom.insert(0, nom); e_nom.pack(pady=5, padx=24, fill="x")
-
+        v.title("Editar Producto")
+        v.geometry("420x340")
+        v.grab_set()
+        
+        # titulo de la ventana con icono de editar
+        img_editar_titulo = self._cargar_icono("editar.png", size=(24, 24))
+        ctk.CTkLabel(v, text="✏️  Editar Producto", font=s.f_subtitulo(), image=img_editar_titulo, compound="left").pack(
+            pady=(18, 8)
+        )
+        e_nom = self._entry(v, ph="Nombre")
+        e_nom.insert(0, nom)
+        e_nom.pack(pady=5, padx=24, fill="x")
         m_cat = self._opt(v, s.CATEGORIAS)
-        m_cat.set(cat); m_cat.pack(pady=5, padx=24, fill="x")
-
-        e_precio = self._entry(v, ph="Precio en $")
-        e_precio.insert(0, str(precio)); e_precio.pack(pady=5, padx=24, fill="x")
-
-        m_estado = self._opt(v, ["Disponible", "Agotado"])
-        m_estado.set(estado); m_estado.pack(pady=5, padx=24, fill="x")
+        m_cat.set(cat)
+        m_cat.pack(pady=5, padx=24, fill="x")
+        e_precio = self._entry(v, ph="Precio $")
+        e_precio.insert(0, str(precio))
+        e_precio.pack(pady=5, padx=24, fill="x")
+        m_est = self._opt(v, ["Disponible", "Agotado"])
+        m_est.set(estado)
+        m_est.pack(pady=5, padx=24, fill="x")
 
         def guardar():
-            nuevo_nom    = e_nom.get().strip()
-            nuevo_cat    = m_cat.get()
-            nuevo_estado = m_estado.get()
+            nuevo_nom = e_nom.get().strip()
             if not nuevo_nom:
-                messagebox.showwarning("Atención", "El nombre es obligatorio.", parent=v); return
+                messagebox.showwarning(
+                    "Atención", "El nombre es obligatorio.", parent=v
+                )
+                return
             try:
                 nuevo_precio = float(e_precio.get().strip())
             except ValueError:
-                messagebox.showerror("Error", "Precio inválido.", parent=v); return
+                messagebox.showerror("Error", "Precio inválido.", parent=v)
+                return
             try:
-                db.actualizar_producto(id_p, nuevo_nom, nuevo_cat, nuevo_precio, nuevo_estado)
-                messagebox.showinfo("Producto actualizado.", "Guardado correctamente.", parent=v)
-                filtro = self._e_buscar_prod_gestion.get().strip() if hasattr(self, "_e_buscar_prod_gestion") else ""
-                self._prod_cargar(filtro=filtro)
+                db.actualizar_producto(
+                    id_p, nuevo_nom, m_cat.get(), nuevo_precio, m_est.get()
+                )
+                messagebox.showinfo("✅", "Producto actualizado.", parent=v)
+                filtro = (
+                    self._e_buscar_prod_gestion.get().strip()
+                    if hasattr(self, "_e_buscar_prod_gestion")
+                    else ""
+                )
+                self._prod_cargar(filtro)
                 v.destroy()
             except Exception as e:
                 messagebox.showerror("Error", str(e), parent=v)
+                
+        img_guardar = self._cargar_icono("guardar.png", size=(18, 18))
 
-        self._btn(v, "Guardar Cambios", guardar, color=s.C_GREEN).pack(pady=14, padx=24, fill="x")
+        self._btn(v, "   Guardar", guardar, color=s.C_GREEN, image=img_guardar).pack(
+            pady=14, padx=24, fill="x"
+        )
 
 
 # ============================================================
