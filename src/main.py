@@ -838,7 +838,7 @@ class App(ctk.CTk):
         id_p, nom, ape, tipo, grado, id_c, ref, tel = datos
         v = ctk.CTkToplevel(self)
         v.title("Editar Cliente")
-        v.geometry("420x460")
+        v.geometry("420x560")
         v.grab_set()
         ctk.CTkLabel(v, text="✏️  Editar Cliente", font=s.f_subtitulo()).pack(
             pady=(18, 8)
