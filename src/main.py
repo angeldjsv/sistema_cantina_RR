@@ -1937,11 +1937,11 @@ class App(ctk.CTk):
         id_p, nom, cat, precio, estado = datos
         v = ctk.CTkToplevel(self)
         v.title("Editar Producto")
-        v.geometry("420x340")
+        v.geometry("420x380")
         v.grab_set()
 
         # titulo de la ventana con icono de editar
-        img_editar_titulo = self._cargar_icono("editar.png", size=(24, 24))
+        img_editar_titulo = self._cargar_icono("lapiz.png", size=(24, 24))
         ctk.CTkLabel(
             v,
             text="✏️  Editar Producto",
