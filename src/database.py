@@ -216,6 +216,20 @@ def toggle_estado_producto(id_producto: int, disponible_actual: bool) -> None:
             cur.close()
             con.close()
 
+def eliminar_producto(id_producto):
+    con = conectar()
+    if not con:
+        raise ConnectionError("No se pudo conectar.")
+    try:
+        cur = con.cursor()
+        cur.execute("DELETE FROM productos WHERE id_producto = %s", (id_producto,))
+        con.commit()
+    except mysql.connector.Error as e:
+        raise RuntimeError(f"Error al eliminar producto: {e}")
+    finally:
+        if con.is_connected():
+            cur.close()
+            con.close()
 
 # ============================================================
 # CUENTAS
