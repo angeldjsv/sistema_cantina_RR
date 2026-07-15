@@ -979,3 +979,46 @@ def eliminar_persona(id_persona: int) -> None:
         if con.is_connected():
             cur.close()
             con.close()
+
+# ============================================================
+# USUARIOS Y AUTENTICACIÓN
+# ============================================================
+
+
+def verificar_login(username: str, password_plana: str) -> dict:
+    """
+    Verifica las credenciales del usuario.
+    Retorna un diccionario con los datos si es exitoso, o None si falla.
+    """
+    # Encriptamos la contraseña ingresada
+    pwd_hash = hashlib.sha256(password_plana.encode("utf-8")).hexdigest()
+
+    con = conectar()
+    if not con:
+        raise ConnectionError("No se pudo conectar a la base de datos.")
+    try:
+        # Usamos el cursor normal, igual que en tus otras funciones
+        cur = con.cursor()
+
+        # IMPORTANTE: String puro. Sin f"" al inicio, y usando %s para los parámetros
+        sql = "SELECT id_usuario, username, rol FROM usuarios WHERE username = %s AND password = %s"
+
+        # cur.execute se encarga de inyectar las variables de forma segura
+        cur.execute(sql, (username, pwd_hash))
+        row = cur.fetchone()
+
+        # Si encuentra al usuario, armamos el diccionario manualmente
+        if row:
+            return {
+                "id_usuario": row[0],
+                "username": row[1],
+                "rol": row[2]
+            }
+        return None
+
+    except mysql.connector.Error as e:
+        raise RuntimeError(f"Error al verificar login: {e}")
+    finally:
+        if con.is_connected():
+            cur.close()
+            con.close()
