@@ -518,7 +518,7 @@ class App(ctk.CTk):
         for c in range(4):
             grid.grid_columnconfigure(c, weight=1)
 
-        # Remplazo nombres por archivos
+    # ── TARJETAS DE MÉTRICAS ───────────────────────────────
 
         tarjetas = [
             ("recipe.png", "Pedidos hoy", str(m["total_pedidos"]), s.C_BLUE),
@@ -526,34 +526,18 @@ class App(ctk.CTk):
             ("relojarena.png", "Pendientes", str(m["pedidos_pendientes"]), s.C_ORANGE),
             ("dinero.png", "Ventas del día", f"${m['ventas_usd']:.2f}", s.C_YELLOW),
             ("bolsa_dinero.png", "Cobrado hoy", f"${m['cobrado_usd']:.2f}", s.C_GREEN),
-            (
-                "deuda.png",
-                "Deuda acumulada",
-                f"${m['deuda_total_usd']:.2f}",
-                s.C_ACCENT,
-            ),
+            ("deuda.png", "Deuda acumulada", f"${m['deuda_total_usd']:.2f}", s.C_ACCENT),
         ]
 
         for i, (archivo_icono, titulo, valor, color) in enumerate(tarjetas):
             card = self._card(grid)
-            card.grid(row=i // 3, column=i % 3, padx=8, pady=8, sticky="nsew")
-
-            # carga de imagen
+            card.grid(row=i // 3, column=i % 3, padx=8, pady=8, sticky="nsew")    
             img_tarjeta = self._cargar_icono(archivo_icono, size=(32, 32))
-
-            # ponemos el texto=""
+            
+            # Renderizado de la tarjeta
             ctk.CTkLabel(card, text="", image=img_tarjeta).pack(pady=(16, 2))
-
-            ctk.CTkLabel(
-                card,
-                text=valor,
-                font=s.f_titulo(),
-                text_color=color,
-            ).pack()
-
-            ctk.CTkLabel(
-                card, text=titulo, font=s.f_small(), text_color=s.C_SUBTEXT
-            ).pack(pady=(2, 16))
+            ctk.CTkLabel(card, text=valor, font=s.f_titulo(), text_color=color).pack()
+            ctk.CTkLabel(card, text=titulo, font=s.f_small(), text_color=s.C_SUBTEXT).pack(pady=(2, 16))
 
         img_trofeo = self._cargar_icono("trofeo.png", size=(20, 20))
 
@@ -566,10 +550,12 @@ class App(ctk.CTk):
             image=img_trofeo,
             compound="left",
         ).grid(row=2, column=0, columnspan=4, pady=(14, 6), sticky="w")
+        
         try:
             top = db.obtener_productos_mas_vendidos(5)
         except Exception:
             top = []
+            
         if not top:
             ctk.CTkLabel(
                 grid,
@@ -580,16 +566,10 @@ class App(ctk.CTk):
         else:
             for i, (nombre, cantidad, ingresos) in enumerate(top):
                 fila = self._card(grid)
-                fila.grid(
-                    row=3 + i, column=0, columnspan=4, sticky="ew", padx=4, pady=3
-                )
+                fila.grid(row=3 + i, column=0, columnspan=4, sticky="ew", padx=4, pady=3)
                 fila.grid_columnconfigure(1, weight=1)
                 ctk.CTkLabel(
-                    fila,
-                    text=f"#{i+1}",
-                    font=s.f_bold(),
-                    text_color=s.C_PURPLE,
-                    width=40,
+                    fila, text=f"#{i+1}", font=s.f_bold(), text_color=s.C_PURPLE, width=40,
                 ).grid(row=0, column=0, padx=(12, 4), pady=10)
                 ctk.CTkLabel(
                     fila, text=nombre, font=s.f_bold(), text_color=s.C_TEXT, anchor="w"
@@ -601,6 +581,109 @@ class App(ctk.CTk):
                     text_color=s.C_GREEN,
                 ).grid(row=0, column=2, padx=12, pady=10)
 
+        # =========================================================
+        # NUEVO: TERCER SUB-ÍTEM - HISTORIAL DE TRANSACCIONES
+        # (Ahora sí, correctamente ubicado al final del grid del Dashboard)
+        # =========================================================
+        fila_historial = 10
+        img_historial = self._cargar_icono("recipe.png", size=(20, 20))
+
+        ctk.CTkLabel(
+            grid,
+            text="   Historial de Transacciones (Consulta)",
+            font=s.f_bold(),
+            text_color=s.C_TEXT,
+            image=img_historial,
+            compound="left",
+        ).grid(row=fila_historial, column=0, columnspan=2, pady=(24, 6), sticky="w")
+
+        # Buscador dinámico para las transacciones
+        self._e_buscar_transaccion = self._entry(grid, ph="🔍 Buscar por alumno o referencia...")
+        self._e_buscar_transaccion.grid(row=fila_historial, column=2, columnspan=2, sticky="ew", padx=4, pady=(24, 6))
+        self._e_buscar_transaccion.bind("<KeyRelease>", self._dash_filtrar_transacciones)
+
+        # Contenedor dedicado para la lista
+        self._frame_transacciones = ctk.CTkFrame(grid, fg_color="transparent")
+        self._frame_transacciones.grid(row=fila_historial + 1, column=0, columnspan=4, sticky="nsew", pady=4)
+        self._frame_transacciones.grid_columnconfigure(0, weight=1)
+
+        # Llamada inicial para cargar la lista de transacciones
+        self._dash_cargar_transacciones()
+
+    # ------------------------------------------------------------
+    # FUNCIONES LÓGICAS PARA LAS TRANSACCIONES (Nivel de clase App)
+    # ------------------------------------------------------------
+
+    def _dash_filtrar_transacciones(self, event=None):
+        """Captura el texto del buscador y recarga la lista."""
+        txt = self._e_buscar_transaccion.get().strip()
+        self._dash_cargar_transacciones(txt)
+
+    def _dash_cargar_transacciones(self, filtro: str = ""):
+        """Obtiene y dibuja el historial de pedidos desde la BD."""
+        for w in self._frame_transacciones.winfo_children():
+            w.destroy()
+
+        try:
+            pedidos = db.obtener_pedidos(filtro=filtro) 
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+            return
+
+        if not pedidos:
+            ctk.CTkLabel(
+                self._frame_transacciones,
+                text="No se encontraron transacciones registradas.",
+                font=s.f_normal(),
+                text_color=s.C_SUBTEXT,
+            ).pack(pady=20)
+            return
+
+        for ped in pedidos:
+            id_pedido, nombre_persona, grado, nombre_cuenta, fecha, total_usd, estado_pago, pagado_usd = ped
+
+            card = self._card(self._frame_transacciones)
+            card.pack(fill="x", padx=4, pady=3)
+            card.grid_columnconfigure(1, weight=1) 
+
+            # 1. Fecha
+            ctk.CTkLabel(
+                card,
+                text=fmt_fecha(fecha),
+                font=s.f_small(),
+                text_color=s.C_SUBTEXT,
+                width=130,
+                anchor="w"
+            ).grid(row=0, column=0, padx=(12, 4), pady=10, sticky="w")
+
+            # 2. Datos del Cliente
+            ctk.CTkLabel(
+                card,
+                text=f"{nombre_persona} ({grado})  ·  Ref: {nombre_cuenta}",
+                font=s.f_bold(),
+                text_color=s.C_TEXT,
+                anchor="w"
+            ).grid(row=0, column=1, sticky="w", pady=10)
+
+            # 3. Monto Total
+            ctk.CTkLabel(
+                card,
+                text=f"${float(total_usd):.2f}",
+                font=s.f_bold(),
+                text_color=s.C_TEXT,
+            ).grid(row=0, column=2, padx=12, pady=10)
+
+            # 4. Estado de Pago
+            color_est = s.C_GREEN if estado_pago == "Pagado" else (s.C_ORANGE if estado_pago == "Parcial" else s.C_ACCENT)
+            
+            ctk.CTkLabel(
+                card,
+                text=estado_pago.upper(),
+                font=s.f_small() if not hasattr(s, 'f_badge') else s.f_badge(),
+                text_color=color_est,
+                width=80
+            ).grid(row=0, column=3, padx=(0, 12), pady=10)
+            
     # ============================================================
     # MÓDULO: CLIENTES (alta de cuentas y personas)
     # ============================================================
